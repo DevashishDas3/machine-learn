@@ -8,11 +8,14 @@ Requirements:
 - Keep hyperparameters concise and realistic.
 - Choose modal_gpu suitable for each approach.
 
-Speed constraints (IMPORTANT):
+Speed constraints (IMPORTANT — all training runs must complete within 90 seconds):
 - For pytorch approaches: set num_epochs between 2 and 5. This is an evaluation run, not final training.
-- For sklearn approaches: prefer models that train quickly (e.g. Random Forest with max 200 trees, SVM on subsampled data if dataset > 50k samples).
+- For sklearn approaches: prefer models that train quickly (e.g. Random Forest with max 200 trees).
 - Include a "num_epochs" key in hyperparameters for all pytorch approaches.
 - Keep batch_size >= 128 for pytorch to reduce iteration count.
+- ALWAYS include "max_train_samples": 10000 in every approach's hyperparameters.
+  The generated code will subsample the dataset to this many samples before training.
+  This is the primary mechanism for keeping runs fast.
 
 Target schema:
 {

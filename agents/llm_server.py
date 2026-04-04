@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 from typing import Any, Dict, Optional
 
 import modal
@@ -56,7 +57,7 @@ def _load_diagnostics() -> None:
         lines.append(f"vllm={vllm.__version__}")
     except Exception as exc:  # noqa: BLE001
         lines.append(f"vllm_import_failed={exc!r}")
-    lines.append("=== end diagnostics; starting LLM() ===")
+    lines.append("=== end diagnostics; starting AsyncLLMEngine ===")
     for ln in lines:
         print(f"[llmserver] {ln}", file=sys.stderr, flush=True)
 
@@ -69,11 +70,19 @@ def _load_diagnostics() -> None:
     min_containers=1,
     max_containers=1,
 )
+@modal.concurrent(max_inputs=SETTINGS.llm_concurrent_requests)
 class LLMServer:
+    """vLLM inference server using AsyncLLMEngine for concurrent request handling.
+
+    A single GPU container handles all concurrent generate() calls through
+    vLLM's continuous batching — no need for multiple containers or warmup.
+    """
+
     @modal.enter()
     def load(self) -> None:
         _load_diagnostics()
-        from vllm import LLM
+        from vllm.engine.arg_utils import AsyncEngineArgs
+        from vllm.engine.async_llm_engine import AsyncLLMEngine
 
         kwargs: dict = {
             "model": SETTINGS.llm_model_primary,
@@ -85,23 +94,25 @@ class LLMServer:
         q = _vllm_quantization()
         if q:
             kwargs["quantization"] = q
-        print(f"[llmserver] LLM(**kwargs) keys={sorted(kwargs.keys())} quantization_in_kwargs={'quantization' in kwargs}", file=sys.stderr, flush=True)
-        self.llm = LLM(**kwargs)
+        print(
+            f"[llmserver] AsyncLLMEngine(**kwargs) keys={sorted(kwargs.keys())} "
+            f"quantization_in_kwargs={'quantization' in kwargs}",
+            file=sys.stderr,
+            flush=True,
+        )
+        engine_args = AsyncEngineArgs(**kwargs)
+        self.engine = AsyncLLMEngine.from_engine_args(engine_args)
 
     @modal.method()
-    def warmup(self) -> Dict[str, Any]:
-        text = self.generate("Reply with JSON {\"ok\": true}.", schema={"type": "object"})
-        return {"ok": True, "sample": text[:120]}
-
-    @modal.method()
-    def generate(
+    async def generate(
         self,
         prompt: str,
         schema: Optional[Dict[str, Any]] = None,
         temperature: float = 0.2,
         max_tokens: int = 1024,
     ) -> str:
-        from vllm.sampling_params import SamplingParams, StructuredOutputsParams
+        from vllm import SamplingParams
+        from vllm.sampling_params import StructuredOutputsParams
 
         structured = StructuredOutputsParams(json=schema) if schema else None
         params = SamplingParams(
@@ -111,5 +122,8 @@ class LLMServer:
             frequency_penalty=0.1,
             structured_outputs=structured,
         )
-        output = self.llm.generate([prompt], params)
-        return output[0].outputs[0].text
+        request_id = uuid.uuid4().hex
+        final_output = None
+        async for output in self.engine.generate(prompt, params, request_id):
+            final_output = output
+        return final_output.outputs[0].text

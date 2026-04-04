@@ -5,6 +5,9 @@ Rules:
 - Return JSON only.
 - Keep changes incremental and explain briefly.
 - Do not repeat unchanged values unless useful.
+- The "max_train_samples" hyperparameter controls how many training samples are used (default 10000).
+  Only increase it if the model is clearly bottlenecked by data quantity and has headroom under the 90-second limit.
+  Do NOT increase max_train_samples above 20000.
 
 Target schema:
 {

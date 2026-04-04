@@ -46,25 +46,21 @@ class Settings:
     modal_environment: str = os.getenv("MODAL_ENVIRONMENT", "main")
 
     llm_model_primary: str = os.getenv("LLM_MODEL_PRIMARY", "Qwen/Qwen2.5-32B-Instruct-AWQ")
-    llm_model_planner: str = os.getenv("LLM_MODEL_PLANNER", "Qwen/Qwen2.5-32B-Instruct-AWQ")
-    llm_model_coder: str = os.getenv("LLM_MODEL_CODER", "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ")
     llm_gpu: str = os.getenv("LLM_GPU", "H100")
-
-    plan_gpu: str = os.getenv("PLAN_GPU", "H100")
     impl_gpu: str = os.getenv("IMPL_GPU", "H100")
-    tuning_gpu: str = os.getenv("TUNING_GPU", "H100")
 
     plan_timeout_seconds: int = _env_int("PLAN_TIMEOUT_SECONDS", 600)
-    train_timeout_seconds: int = _env_int("TRAIN_TIMEOUT_SECONDS", 600)
-    tuning_timeout_seconds: int = _env_int("TUNING_TIMEOUT_SECONDS", 600)
+    train_timeout_seconds: int = _env_int("TRAIN_TIMEOUT_SECONDS", 120)
+    tuning_timeout_seconds: int = _env_int("TUNING_TIMEOUT_SECONDS", 120)
     llm_startup_timeout_seconds: int = _env_int("LLM_STARTUP_TIMEOUT_SECONDS", 1800)
     llm_max_model_len: int = _env_int("LLM_MAX_MODEL_LEN", 8192)
-    llm_gpu_memory_utilization: float = _env_float("LLM_GPU_MEMORY_UTILIZATION", 0.85)
+    llm_gpu_memory_utilization: float = _env_float("LLM_GPU_MEMORY_UTILIZATION", 0.92)
     llm_enforce_eager: bool = _env_bool("LLM_ENFORCE_EAGER", True)
     llm_quantization: str = os.getenv("LLM_QUANTIZATION", "")
 
     max_approaches: int = _env_int("MAX_APPROACHES", 3)
     max_parallel_agents: int = _env_int("MAX_PARALLEL_AGENTS", 4)
+    llm_concurrent_requests: int = _env_int("LLM_CONCURRENT_REQUESTS", 15)
     max_tuning_iterations: int = _env_int("MAX_TUNING_ITERATIONS", 1)
     max_run_budget_usd: float = _env_float("MAX_RUN_BUDGET_USD", 50.0)
 

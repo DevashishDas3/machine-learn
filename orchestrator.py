@@ -3,10 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from pathlib import Path
 from typing import Any, Dict, List, Tuple
-
-import modal
 
 from agents import LLMServer, PlanAgent, ReportAgent, TuningAgent, run_implementation
 from agents.impl_agent import FALLBACK_TRAIN_CODE, ImplementationAgent
@@ -170,6 +167,7 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
     ev.emit("codegen_phase_started", num_approaches=len(approaches))
 
     async def _gen_code(approach: Approach) -> tuple[str, str]:
+        ev.emit("code_generation_started", approach=approach.name, framework=approach.framework)
         try:
             code = await impl_agent.generate_code(
                 approach=approach,
@@ -193,8 +191,20 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
     # --- Phase 2b: Run all training in parallel (semaphore limits GPU containers) ---
     semaphore = asyncio.Semaphore(run_cfg.max_parallel_agents)
 
-    async def _run_approach(approach: Approach, hp_override: Dict[str, Any] | None = None) -> TrainingResult:
+    async def _run_approach(
+        approach: Approach,
+        hp_override: Dict[str, Any] | None = None,
+        iteration: int | None = None,
+    ) -> TrainingResult:
         async with semaphore:
+            phase = "initial" if hp_override is None else "tuning"
+            ev.emit(
+                "training_started",
+                approach=approach.name,
+                phase=phase,
+                iteration=iteration,
+                hyperparameters=hp_override,
+            )
             code = generated_code_by_name.get(approach.name, FALLBACK_TRAIN_CODE)
             try:
                 result_payload = await run_implementation.remote.aio(
@@ -209,7 +219,6 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                 result = TrainingResult.model_validate(result_payload)
             except Exception as exc:  # noqa: BLE001
                 result = _build_error_result(approach.name, str(exc))
-            phase = "initial" if hp_override is None else "tuning"
             ev.emit(
                 "train_result",
                 approach=approach.name,
@@ -253,7 +262,7 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                     iteration=iteration,
                     hyperparameters=new_hp,
                 )
-                tuned_result = await _run_approach(approach, hp_override=new_hp)
+                tuned_result = await _run_approach(approach, hp_override=new_hp, iteration=iteration)
                 latest = tuned_result
                 all_results.append(tuned_result)
                 iterations.append(

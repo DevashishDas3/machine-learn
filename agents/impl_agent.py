@@ -145,7 +145,7 @@ class ImplementationAgent:
                 raw = await self.llm_server.generate.remote.aio(
                     prompt=prompt,
                     temperature=0.1,
-                    max_tokens=4096,
+                    max_tokens=1500,
                 )
                 code = _sanitize_generated_code(raw)
                 compile_err = _compile_check(code)

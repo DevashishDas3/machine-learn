@@ -26,6 +26,13 @@ Hyperparameters:
 - Default num_epochs to at most 3 if not in hyperparameters: num_epochs = int(hyper.get("num_epochs", 3))
 - Default batch_size to at least 128: batch_size = int(hyper.get("batch_size", 128))
 
+Dataset subsampling (REQUIRED for fast evaluation):
+- ALWAYS subsample the loaded dataset before training.
+- Read the cap: max_train_samples = int(hyper.get("max_train_samples", 10000))
+- After loading X and y, immediately apply: idx = numpy.random.permutation(len(X))[:max_train_samples]; X, y = X[idx], y[idx]
+- This keeps every training run under 60 seconds regardless of dataset size or model complexity.
+- Do NOT skip this step even if the dataset is already small.
+
 For framework "pytorch":
 - Use: device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 - Move model AND all tensors to device: model.to(device), X.to(device), y.to(device)

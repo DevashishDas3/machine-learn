@@ -14,7 +14,12 @@ _ROOT = Path(__file__).resolve().parent
 
 def _ignore_dev_artifacts(path: Path) -> bool:
     parts = path.parts
-    return ".venv" in parts or "__pycache__" in parts or ".git" in parts
+    return (
+        ".venv" in parts
+        or "__pycache__" in parts
+        or ".git" in parts
+        or "dashboard-next" in parts  # Next.js app — not needed by Modal workers
+    )
 
 
 def _project_image(
