@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
 import NeuralCanvas from "@/components/NeuralCanvas";
 import TerminalWindow from "@/components/TerminalWindow";
+import ArchitectureDiagram from "@/components/ArchitectureDiagram";
 
 export default function LandingPage() {
   return (
@@ -33,44 +34,37 @@ export default function LandingPage() {
             transition={{ delay: 0.2 }}
             className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-azure"
           >
-            Distributed ML Infrastructure
+            Automated ML Pipelines on Modal GPUs
           </motion.p>
 
           {/* Main Headline */}
           <h1 className="mb-6 font-sans text-5xl font-bold leading-none tracking-tight text-paper md:text-7xl lg:text-8xl">
-            <span className="text-azure">Agent swarms</span>
-            <br />
-            that deploy{" "}
-            <span className="relative">
-              themselves
-              <motion.span
-                initial={{ width: 0 }}
-                animate={{ width: "100%" }}
-                transition={{ delay: 0.8, duration: 0.4 }}
-                className="absolute -bottom-1 left-0 h-[2px] bg-azure"
-              />
-            </span>
+            <span className="font-mono text-azure">machine</span>
+            <span className="font-mono text-paper/60">(</span>
+            <span className="font-mono text-paper">learn</span>
+            <span className="font-mono text-paper/60">);</span>
           </h1>
 
           {/* Subheadline */}
           <p className="mx-auto mb-10 max-w-2xl font-mono text-sm leading-relaxed text-paper/60 md:text-base">
-            Orchestrate ML pipelines on Modal GPUs with vLLM. Sub-second cold starts,
-            instant autoscaling, and a developer experience that feels local.
+            Plan, implement, tune, and report — all automated. Orchestrate ML
+            pipelines with locally hosted LLMs on Modal GPUs. From idea to
+            production in one command.
           </p>
 
           {/* CTA Buttons */}
           <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
             <Link
-              href="/signup"
+              href="/login"
               className="group relative overflow-hidden border border-azure bg-azure px-8 py-3 font-mono text-sm uppercase tracking-widest text-obsidian transition-all hover:shadow-[0_0_20px_rgba(0,128,254,0.5)]"
             >
               <span className="relative z-10">Get Started</span>
             </Link>
             <Link
-              href="/docs"
+              href="https://github.com"
               className="group border border-white/20 px-8 py-3 font-mono text-sm uppercase tracking-widest text-paper transition-all hover:border-paper hover:bg-paper/5"
             >
-              View Docs
+              View Source
             </Link>
           </div>
         </motion.div>
@@ -98,6 +92,32 @@ export default function LandingPage() {
             />
           </div>
         </motion.div>
+      </section>
+
+      {/* Architecture Diagram Section */}
+      <section className="relative z-10 border-t border-white/10 bg-obsidian py-24">
+        <div className="mx-auto max-w-7xl px-6">
+          <motion.div
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            className="mb-12 text-center"
+          >
+            <p className="mb-2 font-mono text-xs uppercase tracking-[0.3em] text-azure">
+              System Architecture
+            </p>
+            <h2 className="font-sans text-3xl font-bold tracking-tight text-paper md:text-4xl">
+              How{" "}
+              <span className="font-mono text-azure">machine</span>
+              <span className="font-mono text-paper/60">(</span>
+              <span className="font-mono text-paper">learn</span>
+              <span className="font-mono text-paper/60">);</span>
+              {" "}works
+            </h2>
+          </motion.div>
+
+          <ArchitectureDiagram />
+        </div>
       </section>
 
       {/* Features Grid Section */}
@@ -158,7 +178,7 @@ export default function LandingPage() {
       <footer className="border-t border-white/10 bg-obsidian py-8">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6">
           <span className="font-mono text-xs text-paper/40">
-            © 2026 ML Agent Swarm
+            © 2026 machine(learn);
           </span>
           <div className="flex gap-6">
             {["GitHub", "Discord", "Twitter"].map((link) => (
