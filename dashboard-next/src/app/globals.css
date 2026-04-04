@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom scrollbar for terminal aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0B1215;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Selection color */
+::selection {
+  background: rgba(0, 128, 254, 0.3);
+  color: #F9F8F7;
+}
+
+/* Focus ring override */
+*:focus-visible {
+  outline: 1px solid #0080FE;
+  outline-offset: 2px;
+}
