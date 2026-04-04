@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 from typing import Any, Dict, List, Tuple
 
 from agents import LLMServer, PlanAgent, ReportAgent, TuningAgent, run_implementation
@@ -115,13 +116,20 @@ def _build_error_result(approach_name: str, error: str) -> TrainingResult:
 def _render_code_with_best_hyperparameters(
     base_code: str, best_hyperparameters: Dict[str, Any]
 ) -> str:
+    rendered = base_code
+    # Replace hyper.get("k", default) with tuned literals for clearer finalized code view.
+    for key, value in best_hyperparameters.items():
+        literal = repr(value)
+        pattern = rf"hyper\.get\(\s*['\"]{re.escape(key)}['\"]\s*,\s*[^\)]*\)"
+        rendered = re.sub(pattern, literal, rendered)
+
     header = (
         "# Finalized run view\n"
         "# Best hyperparameters selected by tuning for this approach:\n"
         f"# {json.dumps(best_hyperparameters, sort_keys=True)}\n"
         "# Note: training code reads payload['hyperparameters'] at runtime.\n\n"
     )
-    return header + base_code
+    return header + rendered
 
 
 @app.function(
