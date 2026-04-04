@@ -1,0 +1,388 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import modal
+
+from agents import LLMServer, PlanAgent, ReportAgent, TuningAgent, run_implementation
+from agents.impl_agent import FALLBACK_TRAIN_CODE, ImplementationAgent
+from config import SETTINGS
+from modal_app import app, base_image, data_volume
+from schemas import Approach, ApproachRun, CostEstimate, RunConfig, RunSummary, TrainingResult, TuningIteration
+from utils.logging_utils import configure_logging, get_logger, make_run_id
+from utils.run_events import RunEventLogger
+from utils.volume_utils import ensure_run_dirs, write_json
+
+
+logger = get_logger(__name__)
+
+
+def _snip(text: str, max_len: int = 160) -> str:
+    t = (text or "").replace("\n", " ").strip()
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 3] + "..."
+
+
+def print_human_run_summary(summary: RunSummary) -> None:
+    """Plain-text follow-up so JSON is not the only place paths and errors appear."""
+    vol = SETTINGS.modal_volume_name
+    rid = summary.run_id
+    base = f"/vol/runs/{rid}"
+    print()
+    print("=" * 72)
+    print("RUN SUMMARY (paths and status)")
+    print("=" * 72)
+    print(f"run_id: {rid}")
+    print(f"Volume: {vol}  →  {base}/")
+    if summary.report_path:
+        print(f"Report:           {summary.report_path}")
+    if summary.artifact_manifest_path:
+        print(f"Artifact manifest:{summary.artifact_manifest_path}")
+    print()
+    print("Copy artifacts locally (examples):")
+    print(f'  modal volume get {vol} {base}/reports/report.md ./report.md')
+    print(f'  modal volume get {vol} {base}/summaries/run_summary.json ./run_summary.json')
+    print(f'  modal volume get {vol} {base}/src ./run_src')
+    print()
+    n_ok = sum(1 for ar in summary.approach_runs if not ar.best_result.error)
+    print(
+        f"Training: {n_ok}/{len(summary.approach_runs)} approaches finished without error "
+        f"(see source_code_path per approach below)."
+    )
+    for ar in summary.approach_runs:
+        tr = ar.best_result
+        tag = "ok" if not tr.error else "error"
+        print(f"  [{tag}] {ar.approach.name} ({ar.approach.framework})")
+        if tr.source_code_path:
+            print(f"        train.py: {tr.source_code_path}")
+        if tr.logs_path:
+            print(f"        log:      {tr.logs_path}")
+        if tr.error:
+            print(f"        {_snip(tr.error)}")
+        elif tr.metrics:
+            print(f"        metrics:  {tr.metrics}")
+    print()
+    print("Recommendation:", summary.recommendation)
+    print("=" * 72)
+
+
+def _metric_score(result: TrainingResult, metric: str, maximize: bool) -> float:
+    if result.error:
+        return -math.inf if maximize else math.inf
+    value = result.metrics.get(metric, None)
+    if value is None:
+        return -math.inf if maximize else math.inf
+    return value
+
+
+def _pick_best_result(results: List[TrainingResult], metric: str, maximize: bool) -> TrainingResult:
+    if maximize:
+        return max(results, key=lambda r: _metric_score(r, metric, maximize=True))
+    return min(results, key=lambda r: _metric_score(r, metric, maximize=False))
+
+
+def _build_error_result(approach_name: str, error: str) -> TrainingResult:
+    return TrainingResult(
+        approach_name=approach_name,
+        metrics={},
+        model_checkpoint_path="",
+        logs_path="",
+        source_code_path="",
+        error=error,
+    )
+
+
+@app.function(
+    image=base_image,
+    volumes={"/vol": data_volume},
+    timeout=120,
+    retries=2,
+    max_containers=1,
+)
+def write_final_artifacts(run_id: str, report_md: str, run_summary: Dict[str, Any]) -> Dict[str, str]:
+    data_volume.reload()
+    dirs = ensure_run_dirs(run_id)
+    report_path = dirs["reports"] / "report.md"
+    summary_path = dirs["summaries"] / "run_summary.json"
+    manifest_path = dirs["summaries"] / "artifact_manifest.json"
+
+    report_path.write_text(report_md, encoding="utf-8")
+    write_json(summary_path, run_summary)
+
+    manifest = {
+        "report_path": str(report_path),
+        "run_summary_path": str(summary_path),
+        "src_root": str(dirs["src"]),
+        "checkpoints_root": str(dirs["checkpoints"]),
+        "logs_root": str(dirs["logs"]),
+    }
+    write_json(manifest_path, manifest)
+    data_volume.commit()
+
+    return {
+        "report_path": str(report_path),
+        "run_summary_path": str(summary_path),
+        "artifact_manifest_path": str(manifest_path),
+    }
+
+
+async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
+    run_id = make_run_id()
+    ev = RunEventLogger(run_id)
+    ev.emit(
+        "pipeline_started",
+        dataset_path=run_cfg.dataset_path,
+        labels_path=run_cfg.labels_path,
+        task_description=run_cfg.task_description[:4000],
+        max_approaches=run_cfg.max_approaches,
+        max_tuning_iterations=run_cfg.max_tuning_iterations,
+        dashboard_hint="streamlit run dashboard.py",
+        local_events_dir=str(ev.dir),
+    )
+    llm = LLMServer()
+    plan_agent = PlanAgent(llm)
+    impl_agent = ImplementationAgent(llm)
+    tuning_agent = TuningAgent(llm)
+    report_agent = ReportAgent(llm)
+
+    logger.info("running_plan_phase", extra={"extra_fields": {"run_id": run_id}})
+    approaches = await plan_agent.run(run_cfg)
+    cost_estimate = CostEstimate.model_validate(plan_agent.estimate_cost(run_cfg, len(approaches)))
+    ev.emit(
+        "plan_complete",
+        approaches=[a.model_dump() for a in approaches],
+        cost_estimate=cost_estimate.model_dump(),
+    )
+
+    if cost_estimate.estimated_cost_usd > run_cfg.run_budget_usd:
+        raise ValueError(
+            f"Estimated run cost ${cost_estimate.estimated_cost_usd:.2f} exceeds budget ${run_cfg.run_budget_usd:.2f}"
+        )
+    ev.emit("budget_ok", run_budget_usd=run_cfg.run_budget_usd)
+
+    # --- Phase 2a: Generate all code in parallel (no GPU slot needed) ---
+    logger.info("running_codegen_phase", extra={"extra_fields": {"run_id": run_id}})
+    ev.emit("codegen_phase_started", num_approaches=len(approaches))
+
+    async def _gen_code(approach: Approach) -> tuple[str, str]:
+        try:
+            code = await impl_agent.generate_code(
+                approach=approach,
+                dataset_path=run_cfg.dataset_path,
+                task_description=run_cfg.task_description,
+                labels_path=run_cfg.labels_path,
+            )
+        except Exception:  # noqa: BLE001
+            code = FALLBACK_TRAIN_CODE
+        ev.emit(
+            "code_generated",
+            approach=approach.name,
+            framework=approach.framework,
+            code_preview=code[:20_000],
+        )
+        return approach.name, code
+
+    gen_pairs = await asyncio.gather(*[_gen_code(a) for a in approaches])
+    generated_code_by_name: Dict[str, str] = {name: code for name, code in gen_pairs}
+
+    # --- Phase 2b: Run all training in parallel (semaphore limits GPU containers) ---
+    semaphore = asyncio.Semaphore(run_cfg.max_parallel_agents)
+
+    async def _run_approach(approach: Approach, hp_override: Dict[str, Any] | None = None) -> TrainingResult:
+        async with semaphore:
+            code = generated_code_by_name.get(approach.name, FALLBACK_TRAIN_CODE)
+            try:
+                result_payload = await run_implementation.remote.aio(
+                    run_id=run_id,
+                    approach=approach.model_dump(),
+                    dataset_path=run_cfg.dataset_path,
+                    task_description=run_cfg.task_description,
+                    generated_code=code,
+                    hyperparameters=hp_override,
+                    labels_path=run_cfg.labels_path,
+                )
+                result = TrainingResult.model_validate(result_payload)
+            except Exception as exc:  # noqa: BLE001
+                result = _build_error_result(approach.name, str(exc))
+            phase = "initial" if hp_override is None else "tuning"
+            ev.emit(
+                "train_result",
+                approach=approach.name,
+                phase=phase,
+                hyperparameters=hp_override,
+                metrics=result.metrics,
+                error=(result.error[:3000] if result.error else None),
+                source_code_path=result.source_code_path or None,
+                logs_path=result.logs_path or None,
+            )
+            return result
+
+    logger.info("running_implementation_phase", extra={"extra_fields": {"run_id": run_id}})
+    ev.emit("implementation_phase_started", num_approaches=len(approaches))
+    initial_results = await asyncio.gather(*[_run_approach(a) for a in approaches], return_exceptions=True)
+
+    initial_results_by_name: Dict[str, TrainingResult] = {}
+    for approach, raw in zip(approaches, initial_results):
+        if isinstance(raw, Exception):
+            initial_results_by_name[approach.name] = _build_error_result(approach.name, str(raw))
+        else:
+            initial_results_by_name[approach.name] = raw
+
+    logger.info("running_tuning_phase", extra={"extra_fields": {"run_id": run_id}})
+    ev.emit("tuning_phase_started")
+
+    async def tune_single(approach: Approach, current: TrainingResult) -> Tuple[List[TuningIteration], TrainingResult]:
+        iterations: List[TuningIteration] = []
+        all_results = [current]
+        latest = current
+        for iteration in range(1, run_cfg.max_tuning_iterations + 1):
+            try:
+                new_hp = await tuning_agent.suggest_hyperparameters(
+                    approach=approach,
+                    current_result=latest,
+                    objective_metric=run_cfg.primary_metric,
+                )
+                ev.emit(
+                    "tuning_suggestion",
+                    approach=approach.name,
+                    iteration=iteration,
+                    hyperparameters=new_hp,
+                )
+                tuned_result = await _run_approach(approach, hp_override=new_hp)
+                latest = tuned_result
+                all_results.append(tuned_result)
+                iterations.append(
+                    TuningIteration(
+                        iteration=iteration,
+                        hyperparameters=new_hp,
+                        result=tuned_result,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                err = _build_error_result(approach.name, str(exc))
+                latest = err
+                all_results.append(err)
+                iterations.append(
+                    TuningIteration(
+                        iteration=iteration,
+                        hyperparameters=dict(approach.hyperparameters),
+                        result=err,
+                    )
+                )
+
+        best = _pick_best_result(all_results, run_cfg.primary_metric, run_cfg.maximize_metric)
+        return iterations, best
+
+    tuning_tasks = [tune_single(a, initial_results_by_name[a.name]) for a in approaches]
+    tuning_outputs = await asyncio.gather(*tuning_tasks, return_exceptions=True)
+
+    approach_runs: List[ApproachRun] = []
+    for approach, tuned in zip(approaches, tuning_outputs):
+        initial_result = initial_results_by_name[approach.name]
+        if isinstance(tuned, Exception):
+            fallback_best = initial_result
+            approach_runs.append(
+                ApproachRun(
+                    approach=approach,
+                    initial_result=initial_result,
+                    tuning_iterations=[],
+                    best_result=fallback_best,
+                )
+            )
+            continue
+
+        iterations, best = tuned
+        approach_runs.append(
+            ApproachRun(
+                approach=approach,
+                initial_result=initial_result,
+                tuning_iterations=iterations,
+                best_result=best,
+            )
+        )
+
+    best_overall = _pick_best_result(
+        [ar.best_result for ar in approach_runs],
+        run_cfg.primary_metric,
+        run_cfg.maximize_metric,
+    )
+    recommendation = (
+        f"Recommended approach: {best_overall.approach_name} "
+        f"based on best `{run_cfg.primary_metric}` = {best_overall.metrics.get(run_cfg.primary_metric, 'n/a')}."
+    )
+
+    logger.info("running_report_phase", extra={"extra_fields": {"run_id": run_id}})
+    ev.emit("report_phase_started")
+    report_md = await report_agent.build_report(run_id, run_cfg, approach_runs, recommendation)
+    ev.emit("report_complete", report_preview=report_md[:30_000])
+
+    summary = RunSummary(
+        run_id=run_id,
+        config=run_cfg,
+        cost_estimate=cost_estimate,
+        approaches=approaches,
+        approach_runs=approach_runs,
+        recommendation=recommendation,
+    )
+
+    artifact_paths = await write_final_artifacts.remote.aio(
+        run_id=run_id,
+        report_md=report_md,
+        run_summary=json.loads(summary.model_dump_json()),
+    )
+
+    summary.report_path = artifact_paths["report_path"]
+    summary.artifact_manifest_path = artifact_paths["artifact_manifest_path"]
+    ev.emit(
+        "pipeline_complete",
+        report_path=summary.report_path,
+        artifact_manifest_path=summary.artifact_manifest_path,
+        recommendation=summary.recommendation,
+    )
+    ev.write_state(
+        {
+            "run_id": run_id,
+            "report_path": summary.report_path,
+            "artifact_manifest_path": summary.artifact_manifest_path,
+            "recommendation": summary.recommendation,
+            "summary_json": json.loads(summary.model_dump_json()),
+        }
+    )
+    return summary
+
+
+@app.local_entrypoint()
+def main(
+    dataset_path: str,
+    task_description: str,
+    labels_path: str | None = None,
+    max_approaches: int = SETTINGS.max_approaches,
+    max_tuning_iterations: int = SETTINGS.max_tuning_iterations,
+    max_parallel_agents: int = SETTINGS.max_parallel_agents,
+    primary_metric: str = SETTINGS.default_primary_metric,
+    maximize_metric: bool = True,
+    run_budget_usd: float = SETTINGS.max_run_budget_usd,
+) -> None:
+    configure_logging()
+    run_cfg = RunConfig(
+        dataset_path=dataset_path,
+        task_description=task_description,
+        labels_path=labels_path,
+        max_approaches=max_approaches,
+        max_tuning_iterations=max_tuning_iterations,
+        max_parallel_agents=max_parallel_agents,
+        primary_metric=primary_metric,
+        maximize_metric=maximize_metric,
+        run_budget_usd=run_budget_usd,
+    )
+    summary = asyncio.run(_run_pipeline(run_cfg))
+    print(summary.model_dump_json(indent=2))
+    print_human_run_summary(summary)
+    print()
+    print(f"Live dashboard (local): streamlit run dashboard.py")
+    print(f"Event log for this run: runs_local/{summary.run_id}/events.jsonl")
