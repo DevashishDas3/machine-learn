@@ -5,11 +5,25 @@ import json
 import math
 from typing import Any, Dict, List, Tuple
 
-from agents import LLMServer, PlanAgent, ReportAgent, TuningAgent, run_implementation
+from agents import (
+    PlanAgent,
+    ReportAgent,
+    TuningAgent,
+    get_llm_server_handle,
+    run_implementation,
+)
 from agents.impl_agent import FALLBACK_TRAIN_CODE, ImplementationAgent
 from config import SETTINGS
 from modal_app import app, base_image, data_volume
-from schemas import Approach, ApproachRun, CostEstimate, RunConfig, RunSummary, TrainingResult, TuningIteration
+from schemas import (
+    Approach,
+    ApproachRun,
+    CostEstimate,
+    RunConfig,
+    RunSummary,
+    TrainingResult,
+    TuningIteration,
+)
 from utils.logging_utils import configure_logging, get_logger, make_run_id
 from utils.run_events import RunEventLogger
 from utils.volume_utils import ensure_run_dirs, write_json
@@ -42,9 +56,11 @@ def print_human_run_summary(summary: RunSummary) -> None:
         print(f"Artifact manifest:{summary.artifact_manifest_path}")
     print()
     print("Copy artifacts locally (examples):")
-    print(f'  modal volume get {vol} {base}/reports/report.md ./report.md')
-    print(f'  modal volume get {vol} {base}/summaries/run_summary.json ./run_summary.json')
-    print(f'  modal volume get {vol} {base}/src ./run_src')
+    print(f"  modal volume get {vol} {base}/reports/report.md ./report.md")
+    print(
+        f"  modal volume get {vol} {base}/summaries/run_summary.json ./run_summary.json"
+    )
+    print(f"  modal volume get {vol} {base}/src ./run_src")
     print()
     n_ok = sum(1 for ar in summary.approach_runs if not ar.best_result.error)
     print(
@@ -77,7 +93,9 @@ def _metric_score(result: TrainingResult, metric: str, maximize: bool) -> float:
     return value
 
 
-def _pick_best_result(results: List[TrainingResult], metric: str, maximize: bool) -> TrainingResult:
+def _pick_best_result(
+    results: List[TrainingResult], metric: str, maximize: bool
+) -> TrainingResult:
     if maximize:
         return max(results, key=lambda r: _metric_score(r, metric, maximize=True))
     return min(results, key=lambda r: _metric_score(r, metric, maximize=False))
@@ -102,7 +120,9 @@ def _build_error_result(approach_name: str, error: str) -> TrainingResult:
     retries=2,
     max_containers=1,
 )
-def write_final_artifacts(run_id: str, report_md: str, run_summary: Dict[str, Any]) -> Dict[str, str]:
+def write_final_artifacts(
+    run_id: str, report_md: str, run_summary: Dict[str, Any]
+) -> Dict[str, str]:
     data_volume.reload()
     dirs = ensure_run_dirs(run_id)
     report_path = dirs["reports"] / "report.md"
@@ -143,7 +163,7 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
         dashboard_hint="streamlit run dashboard.py",
         local_events_dir=str(ev.dir),
     )
-    llm = LLMServer()
+    llm = get_llm_server_handle()
     plan_agent = PlanAgent(llm)
     impl_agent = ImplementationAgent(llm)
     tuning_agent = TuningAgent(llm)
@@ -151,7 +171,9 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
 
     logger.info("running_plan_phase", extra={"extra_fields": {"run_id": run_id}})
     approaches = await plan_agent.run(run_cfg)
-    cost_estimate = CostEstimate.model_validate(plan_agent.estimate_cost(run_cfg, len(approaches)))
+    cost_estimate = CostEstimate.model_validate(
+        plan_agent.estimate_cost(run_cfg, len(approaches))
+    )
     ev.emit(
         "plan_complete",
         approaches=[a.model_dump() for a in approaches],
@@ -169,7 +191,11 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
     ev.emit("codegen_phase_started", num_approaches=len(approaches))
 
     async def _gen_code(approach: Approach) -> tuple[str, str]:
-        ev.emit("code_generation_started", approach=approach.name, framework=approach.framework)
+        ev.emit(
+            "code_generation_started",
+            approach=approach.name,
+            framework=approach.framework,
+        )
         try:
             code = await impl_agent.generate_code(
                 approach=approach,
@@ -221,7 +247,9 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                         iteration=iteration,
                         fix_attempt=fix_i + 1,
                         max_attempts=max_fix,
-                        previous_error=_snip(last_result.error or "") if last_result else "",
+                        previous_error=_snip(last_result.error or "")
+                        if last_result
+                        else "",
                     )
 
                 try:
@@ -275,23 +303,35 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                     ev.emit("train_fix_failed", approach=approach.name, error=str(exc))
                     return last_result
 
-            return last_result if last_result else _build_error_result(approach.name, "training failed")
+            return (
+                last_result
+                if last_result
+                else _build_error_result(approach.name, "training failed")
+            )
 
-    logger.info("running_implementation_phase", extra={"extra_fields": {"run_id": run_id}})
+    logger.info(
+        "running_implementation_phase", extra={"extra_fields": {"run_id": run_id}}
+    )
     ev.emit("implementation_phase_started", num_approaches=len(approaches))
-    initial_results = await asyncio.gather(*[_run_approach(a) for a in approaches], return_exceptions=True)
+    initial_results = await asyncio.gather(
+        *[_run_approach(a) for a in approaches], return_exceptions=True
+    )
 
     initial_results_by_name: Dict[str, TrainingResult] = {}
     for approach, raw in zip(approaches, initial_results):
         if isinstance(raw, Exception):
-            initial_results_by_name[approach.name] = _build_error_result(approach.name, str(raw))
+            initial_results_by_name[approach.name] = _build_error_result(
+                approach.name, str(raw)
+            )
         else:
             initial_results_by_name[approach.name] = raw
 
     logger.info("running_tuning_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("tuning_phase_started")
 
-    async def tune_single(approach: Approach, current: TrainingResult) -> Tuple[List[TuningIteration], TrainingResult]:
+    async def tune_single(
+        approach: Approach, current: TrainingResult
+    ) -> Tuple[List[TuningIteration], TrainingResult]:
         iterations: List[TuningIteration] = []
         all_results = [current]
         latest = current
@@ -308,7 +348,9 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                     iteration=iteration,
                     hyperparameters=new_hp,
                 )
-                tuned_result = await _run_approach(approach, hp_override=new_hp, iteration=iteration)
+                tuned_result = await _run_approach(
+                    approach, hp_override=new_hp, iteration=iteration
+                )
                 latest = tuned_result
                 all_results.append(tuned_result)
                 iterations.append(
@@ -330,7 +372,9 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                     )
                 )
 
-        best = _pick_best_result(all_results, run_cfg.primary_metric, run_cfg.maximize_metric)
+        best = _pick_best_result(
+            all_results, run_cfg.primary_metric, run_cfg.maximize_metric
+        )
         return iterations, best
 
     tuning_tasks = [tune_single(a, initial_results_by_name[a.name]) for a in approaches]
@@ -373,7 +417,9 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
 
     logger.info("running_report_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("report_phase_started")
-    report_md = await report_agent.build_report(run_id, run_cfg, approach_runs, recommendation)
+    report_md = await report_agent.build_report(
+        run_id, run_cfg, approach_runs, recommendation
+    )
     ev.emit("report_complete", report_preview=report_md[:30_000])
 
     summary = RunSummary(
