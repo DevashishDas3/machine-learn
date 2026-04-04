@@ -9,9 +9,22 @@ from agents import LLMServer, PlanAgent, ReportAgent, TuningAgent, run_implement
 from agents.impl_agent import FALLBACK_TRAIN_CODE, ImplementationAgent
 from config import SETTINGS
 from modal_app import app, base_image, data_volume
-from schemas import Approach, ApproachRun, CostEstimate, RunConfig, RunSummary, TrainingResult, TuningIteration
+from schemas import (
+    Approach,
+    ApproachRun,
+    CostEstimate,
+    RunConfig,
+    RunSummary,
+    TrainingResult,
+    TuningHistoryRecord,
+    TuningIteration,
+)
 from utils.logging_utils import configure_logging, get_logger, make_run_id
-from utils.run_events import RunEventLogger
+from utils.run_events import (
+    RunEventLogger,
+    append_tuning_history_record,
+    load_tuning_history,
+)
 from utils.volume_utils import ensure_run_dirs, write_json
 
 
@@ -42,9 +55,11 @@ def print_human_run_summary(summary: RunSummary) -> None:
         print(f"Artifact manifest:{summary.artifact_manifest_path}")
     print()
     print("Copy artifacts locally (examples):")
-    print(f'  modal volume get {vol} {base}/reports/report.md ./report.md')
-    print(f'  modal volume get {vol} {base}/summaries/run_summary.json ./run_summary.json')
-    print(f'  modal volume get {vol} {base}/src ./run_src')
+    print(f"  modal volume get {vol} {base}/reports/report.md ./report.md")
+    print(
+        f"  modal volume get {vol} {base}/summaries/run_summary.json ./run_summary.json"
+    )
+    print(f"  modal volume get {vol} {base}/src ./run_src")
     print()
     n_ok = sum(1 for ar in summary.approach_runs if not ar.best_result.error)
     print(
@@ -77,7 +92,9 @@ def _metric_score(result: TrainingResult, metric: str, maximize: bool) -> float:
     return value
 
 
-def _pick_best_result(results: List[TrainingResult], metric: str, maximize: bool) -> TrainingResult:
+def _pick_best_result(
+    results: List[TrainingResult], metric: str, maximize: bool
+) -> TrainingResult:
     if maximize:
         return max(results, key=lambda r: _metric_score(r, metric, maximize=True))
     return min(results, key=lambda r: _metric_score(r, metric, maximize=False))
@@ -95,6 +112,18 @@ def _build_error_result(approach_name: str, error: str) -> TrainingResult:
     )
 
 
+def _render_code_with_best_hyperparameters(
+    base_code: str, best_hyperparameters: Dict[str, Any]
+) -> str:
+    header = (
+        "# Finalized run view\n"
+        "# Best hyperparameters selected by tuning for this approach:\n"
+        f"# {json.dumps(best_hyperparameters, sort_keys=True)}\n"
+        "# Note: training code reads payload['hyperparameters'] at runtime.\n\n"
+    )
+    return header + base_code
+
+
 @app.function(
     image=base_image,
     volumes={"/vol": data_volume},
@@ -102,7 +131,9 @@ def _build_error_result(approach_name: str, error: str) -> TrainingResult:
     retries=2,
     max_containers=1,
 )
-def write_final_artifacts(run_id: str, report_md: str, run_summary: Dict[str, Any]) -> Dict[str, str]:
+def write_final_artifacts(
+    run_id: str, report_md: str, run_summary: Dict[str, Any]
+) -> Dict[str, str]:
     data_volume.reload()
     dirs = ensure_run_dirs(run_id)
     report_path = dirs["reports"] / "report.md"
@@ -151,7 +182,9 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
 
     logger.info("running_plan_phase", extra={"extra_fields": {"run_id": run_id}})
     approaches = await plan_agent.run(run_cfg)
-    cost_estimate = CostEstimate.model_validate(plan_agent.estimate_cost(run_cfg, len(approaches)))
+    cost_estimate = CostEstimate.model_validate(
+        plan_agent.estimate_cost(run_cfg, len(approaches))
+    )
     ev.emit(
         "plan_complete",
         approaches=[a.model_dump() for a in approaches],
@@ -169,7 +202,11 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
     ev.emit("codegen_phase_started", num_approaches=len(approaches))
 
     async def _gen_code(approach: Approach) -> tuple[str, str]:
-        ev.emit("code_generation_started", approach=approach.name, framework=approach.framework)
+        ev.emit(
+            "code_generation_started",
+            approach=approach.name,
+            framework=approach.framework,
+        )
         try:
             code = await impl_agent.generate_code(
                 approach=approach,
@@ -221,7 +258,9 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                         iteration=iteration,
                         fix_attempt=fix_i + 1,
                         max_attempts=max_fix,
-                        previous_error=_snip(last_result.error or "") if last_result else "",
+                        previous_error=(
+                            _snip(last_result.error or "") if last_result else ""
+                        ),
                     )
 
                 try:
@@ -242,6 +281,7 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                     "train_result",
                     approach=approach.name,
                     phase=phase,
+                    iteration=iteration,
                     hyperparameters=hp_override,
                     metrics=last_result.metrics,
                     error=(last_result.error[:3000] if last_result.error else None),
@@ -275,72 +315,179 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                     ev.emit("train_fix_failed", approach=approach.name, error=str(exc))
                     return last_result
 
-            return last_result if last_result else _build_error_result(approach.name, "training failed")
+            return (
+                last_result
+                if last_result
+                else _build_error_result(approach.name, "training failed")
+            )
 
-    logger.info("running_implementation_phase", extra={"extra_fields": {"run_id": run_id}})
+    logger.info(
+        "running_implementation_phase", extra={"extra_fields": {"run_id": run_id}}
+    )
     ev.emit("implementation_phase_started", num_approaches=len(approaches))
-    initial_results = await asyncio.gather(*[_run_approach(a) for a in approaches], return_exceptions=True)
+    initial_results = await asyncio.gather(
+        *[_run_approach(a) for a in approaches], return_exceptions=True
+    )
 
     initial_results_by_name: Dict[str, TrainingResult] = {}
     for approach, raw in zip(approaches, initial_results):
         if isinstance(raw, Exception):
-            initial_results_by_name[approach.name] = _build_error_result(approach.name, str(raw))
+            initial_results_by_name[approach.name] = _build_error_result(
+                approach.name, str(raw)
+            )
         else:
             initial_results_by_name[approach.name] = raw
 
     logger.info("running_tuning_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("tuning_phase_started")
 
-    async def tune_single(approach: Approach, current: TrainingResult) -> Tuple[List[TuningIteration], TrainingResult]:
+    async def tune_single(
+        approach: Approach, current: TrainingResult
+    ) -> Tuple[List[TuningIteration], TrainingResult, Dict[str, Any]]:
         iterations: List[TuningIteration] = []
         all_results = [current]
+        candidate_hyperparams: List[Dict[str, Any]] = [dict(approach.hyperparameters)]
         latest = current
+        cross_run_history = load_tuning_history(approach.name, limit=80)
+        in_run_history: List[TuningHistoryRecord] = [
+            TuningHistoryRecord(
+                run_id=run_id,
+                approach_name=approach.name,
+                iteration=0,
+                primary_metric=run_cfg.primary_metric,
+                maximize_metric=run_cfg.maximize_metric,
+                primary_metric_value=current.metrics.get(run_cfg.primary_metric),
+                hyperparameters=dict(approach.hyperparameters),
+                metrics=current.metrics,
+                error=current.error,
+            )
+        ]
+        print(
+            f"[TUNING][{approach.name}] loaded cross-run history records="
+            f"{len(cross_run_history)}"
+        )
+        if not cross_run_history:
+            print(
+                f"[TUNING][{approach.name}] 0 prior cross-run records; exploring from baseline"
+            )
+
         for iteration in range(1, run_cfg.max_tuning_iterations + 1):
+            attempted_hp = dict(approach.hyperparameters)
+            prev_primary = latest.metrics.get(run_cfg.primary_metric)
+            has_in_run_history = len(in_run_history) > 0
+            has_cross_run_history = len(cross_run_history) > 0
+            history_source = (
+                "both"
+                if has_in_run_history and has_cross_run_history
+                else (
+                    "in-run"
+                    if has_in_run_history
+                    else "cross-run" if has_cross_run_history else "none"
+                )
+            )
             try:
-                new_hp = await tuning_agent.suggest_hyperparameters(
+                attempted_hp = await tuning_agent.suggest_hyperparameters(
                     approach=approach,
                     current_result=latest,
                     objective_metric=run_cfg.primary_metric,
+                    in_run_history=in_run_history,
+                    cross_run_history=cross_run_history,
                 )
                 ev.emit(
                     "tuning_suggestion",
                     approach=approach.name,
                     iteration=iteration,
-                    hyperparameters=new_hp,
+                    hyperparameters=attempted_hp,
                 )
-                tuned_result = await _run_approach(approach, hp_override=new_hp, iteration=iteration)
-                latest = tuned_result
-                all_results.append(tuned_result)
-                iterations.append(
-                    TuningIteration(
-                        iteration=iteration,
-                        hyperparameters=new_hp,
-                        result=tuned_result,
-                    )
+                tuned_result = await _run_approach(
+                    approach, hp_override=attempted_hp, iteration=iteration
                 )
             except Exception as exc:  # noqa: BLE001
                 err = _build_error_result(approach.name, str(exc))
-                latest = err
-                all_results.append(err)
-                iterations.append(
-                    TuningIteration(
-                        iteration=iteration,
-                        hyperparameters=dict(approach.hyperparameters),
-                        result=err,
+                tuned_result = err
+
+            latest = tuned_result
+            all_results.append(tuned_result)
+            candidate_hyperparams.append(attempted_hp)
+            iterations.append(
+                TuningIteration(
+                    iteration=iteration,
+                    hyperparameters=attempted_hp,
+                    result=tuned_result,
+                )
+            )
+
+            history_record = TuningHistoryRecord(
+                run_id=run_id,
+                approach_name=approach.name,
+                iteration=iteration,
+                primary_metric=run_cfg.primary_metric,
+                maximize_metric=run_cfg.maximize_metric,
+                primary_metric_value=tuned_result.metrics.get(run_cfg.primary_metric),
+                hyperparameters=attempted_hp,
+                metrics=tuned_result.metrics,
+                error=tuned_result.error,
+            )
+            in_run_history.append(history_record)
+            append_tuning_history_record(history_record)
+
+            new_primary = tuned_result.metrics.get(run_cfg.primary_metric)
+            delta_text = "n/a"
+            if prev_primary is not None and new_primary is not None:
+                delta_text = f"{(new_primary - prev_primary):+.6f}"
+            status = (
+                "error"
+                if tuned_result.error
+                else (
+                    "improved"
+                    if (
+                        prev_primary is not None
+                        and new_primary is not None
+                        and (
+                            (new_primary > prev_primary and run_cfg.maximize_metric)
+                            or (
+                                new_primary < prev_primary
+                                and not run_cfg.maximize_metric
+                            )
+                        )
+                    )
+                    else (
+                        "worse_or_equal"
+                        if prev_primary is not None and new_primary is not None
+                        else "no_metric"
                     )
                 )
+            )
+            print(
+                f"[TUNING][{approach.name}] iter={iteration} history_source={history_source} "
+                f"in_run={len(in_run_history)-1} cross_run={len(cross_run_history)} "
+                f"prev_{run_cfg.primary_metric}={prev_primary} "
+                f"new_{run_cfg.primary_metric}={new_primary} delta={delta_text} status={status}"
+            )
+            if tuned_result.error:
+                print(
+                    f"[TUNING][{approach.name}] iter={iteration} error={_snip(tuned_result.error)}"
+                )
 
-        best = _pick_best_result(all_results, run_cfg.primary_metric, run_cfg.maximize_metric)
-        return iterations, best
+        best = _pick_best_result(
+            all_results, run_cfg.primary_metric, run_cfg.maximize_metric
+        )
+        best_index = all_results.index(best)
+        best_hyperparameters = candidate_hyperparams[best_index]
+        return iterations, best, best_hyperparameters
 
     tuning_tasks = [tune_single(a, initial_results_by_name[a.name]) for a in approaches]
     tuning_outputs = await asyncio.gather(*tuning_tasks, return_exceptions=True)
 
     approach_runs: List[ApproachRun] = []
+    best_hyperparameters_by_name: Dict[str, Dict[str, Any]] = {}
     for approach, tuned in zip(approaches, tuning_outputs):
         initial_result = initial_results_by_name[approach.name]
         if isinstance(tuned, Exception):
             fallback_best = initial_result
+            best_hyperparameters_by_name[approach.name] = dict(
+                approach.hyperparameters
+            )
             approach_runs.append(
                 ApproachRun(
                     approach=approach,
@@ -351,7 +498,8 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
             )
             continue
 
-        iterations, best = tuned
+        iterations, best, best_hyperparameters = tuned
+        best_hyperparameters_by_name[approach.name] = best_hyperparameters
         approach_runs.append(
             ApproachRun(
                 approach=approach,
@@ -371,9 +519,26 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
         f"based on best `{run_cfg.primary_metric}` = {best_overall.metrics.get(run_cfg.primary_metric, 'n/a')}."
     )
 
+    for approach in approaches:
+        base_code = generated_code_by_name.get(approach.name, FALLBACK_TRAIN_CODE)
+        final_code = _render_code_with_best_hyperparameters(
+            base_code,
+            best_hyperparameters_by_name.get(
+                approach.name, dict(approach.hyperparameters)
+            ),
+        )
+        ev.emit(
+            "code_finalized",
+            approach=approach.name,
+            framework=approach.framework,
+            code_preview=final_code[:20_000],
+        )
+
     logger.info("running_report_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("report_phase_started")
-    report_md = await report_agent.build_report(run_id, run_cfg, approach_runs, recommendation)
+    report_md = await report_agent.build_report(
+        run_id, run_cfg, approach_runs, recommendation
+    )
     ev.emit("report_complete", report_preview=report_md[:30_000])
 
     summary = RunSummary(

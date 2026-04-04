@@ -6,6 +6,7 @@ from schemas.types import (
     RunConfig,
     RunSummary,
     TrainingResult,
+    TuningHistoryRecord,
     TuningIteration,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "RunConfig",
     "RunSummary",
     "TrainingResult",
+    "TuningHistoryRecord",
     "TuningIteration",
 ]

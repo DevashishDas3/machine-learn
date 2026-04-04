@@ -1,4 +1,4 @@
-from schemas.types import Approach, RunConfig, TrainingResult
+from schemas.types import Approach, RunConfig, TrainingResult, TuningHistoryRecord
 
 
 def test_approach_framework_normalization() -> None:
@@ -23,7 +23,11 @@ def test_training_result_metrics_normalized_to_float() -> None:
 
 
 def test_run_config_metric_normalization() -> None:
-    cfg = RunConfig(dataset_path="/vol/data.csv", task_description="classify", primary_metric="  F1 ")
+    cfg = RunConfig(
+        dataset_path="/vol/data.csv",
+        task_description="classify",
+        primary_metric="  F1 ",
+    )
     assert cfg.primary_metric == "f1"
 
 
@@ -34,3 +38,21 @@ def test_run_config_labels_path_optional() -> None:
         labels_path="/vol/mnist/train-labels.idx1-ubyte",
     )
     assert cfg.labels_path.endswith("idx1-ubyte")
+
+
+def test_tuning_history_record_metric_normalization() -> None:
+    rec = TuningHistoryRecord(
+        run_id="run-1",
+        approach_name="MLP baseline",
+        iteration=1,
+        primary_metric=" Accuracy ",
+        maximize_metric=True,
+        primary_metric_value="0.88",
+        hyperparameters={"lr": 0.001},
+        metrics={"Accuracy": "0.88", "loss": 0.22, "bad": "x"},
+    )
+    assert rec.primary_metric == "accuracy"
+    assert rec.primary_metric_value == 0.88
+    assert rec.metrics["accuracy"] == 0.88
+    assert rec.metrics["loss"] == 0.22
+    assert "bad" not in rec.metrics
