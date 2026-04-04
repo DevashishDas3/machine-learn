@@ -91,6 +91,7 @@ def _build_error_result(approach_name: str, error: str) -> TrainingResult:
         logs_path="",
         source_code_path="",
         error=error,
+        logs_excerpt=None,
     )
 
 
@@ -138,6 +139,7 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
         task_description=run_cfg.task_description[:4000],
         max_approaches=run_cfg.max_approaches,
         max_tuning_iterations=run_cfg.max_tuning_iterations,
+        max_train_fix_attempts=run_cfg.max_train_fix_attempts,
         dashboard_hint="streamlit run dashboard.py",
         local_events_dir=str(ev.dir),
     )
@@ -198,38 +200,82 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
     ) -> TrainingResult:
         async with semaphore:
             phase = "initial" if hp_override is None else "tuning"
-            ev.emit(
-                "training_started",
-                approach=approach.name,
-                phase=phase,
-                iteration=iteration,
-                hyperparameters=hp_override,
-            )
             code = generated_code_by_name.get(approach.name, FALLBACK_TRAIN_CODE)
-            try:
-                result_payload = await run_implementation.remote.aio(
-                    run_id=run_id,
-                    approach=approach.model_dump(),
-                    dataset_path=run_cfg.dataset_path,
-                    task_description=run_cfg.task_description,
-                    generated_code=code,
+            max_fix = max(1, run_cfg.max_train_fix_attempts)
+            last_result: TrainingResult | None = None
+
+            for fix_i in range(max_fix):
+                if fix_i == 0:
+                    ev.emit(
+                        "training_started",
+                        approach=approach.name,
+                        phase=phase,
+                        iteration=iteration,
+                        hyperparameters=hp_override,
+                    )
+                else:
+                    ev.emit(
+                        "training_fix_retry",
+                        approach=approach.name,
+                        phase=phase,
+                        iteration=iteration,
+                        fix_attempt=fix_i + 1,
+                        max_attempts=max_fix,
+                        previous_error=_snip(last_result.error or "") if last_result else "",
+                    )
+
+                try:
+                    result_payload = await run_implementation.remote.aio(
+                        run_id=run_id,
+                        approach=approach.model_dump(),
+                        dataset_path=run_cfg.dataset_path,
+                        task_description=run_cfg.task_description,
+                        generated_code=code,
+                        hyperparameters=hp_override,
+                        labels_path=run_cfg.labels_path,
+                    )
+                    last_result = TrainingResult.model_validate(result_payload)
+                except Exception as exc:  # noqa: BLE001
+                    last_result = _build_error_result(approach.name, str(exc))
+
+                ev.emit(
+                    "train_result",
+                    approach=approach.name,
+                    phase=phase,
                     hyperparameters=hp_override,
-                    labels_path=run_cfg.labels_path,
+                    metrics=last_result.metrics,
+                    error=(last_result.error[:3000] if last_result.error else None),
+                    source_code_path=last_result.source_code_path or None,
+                    logs_path=last_result.logs_path or None,
+                    fix_attempt=fix_i + 1,
+                    max_fix_attempts=max_fix,
                 )
-                result = TrainingResult.model_validate(result_payload)
-            except Exception as exc:  # noqa: BLE001
-                result = _build_error_result(approach.name, str(exc))
-            ev.emit(
-                "train_result",
-                approach=approach.name,
-                phase=phase,
-                hyperparameters=hp_override,
-                metrics=result.metrics,
-                error=(result.error[:3000] if result.error else None),
-                source_code_path=result.source_code_path or None,
-                logs_path=result.logs_path or None,
-            )
-            return result
+
+                if not last_result.error:
+                    generated_code_by_name[approach.name] = code
+                    return last_result
+
+                if fix_i >= max_fix - 1:
+                    generated_code_by_name[approach.name] = code
+                    return last_result
+
+                try:
+                    code = await impl_agent.fix_code_after_failure(
+                        approach=approach,
+                        dataset_path=run_cfg.dataset_path,
+                        task_description=run_cfg.task_description,
+                        failed_code=code,
+                        runtime_error=last_result.error or "",
+                        hyperparameters=hp_override,
+                        labels_path=run_cfg.labels_path,
+                        logs_excerpt=last_result.logs_excerpt,
+                    )
+                    generated_code_by_name[approach.name] = code
+                except Exception as exc:  # noqa: BLE001
+                    ev.emit("train_fix_failed", approach=approach.name, error=str(exc))
+                    return last_result
+
+            return last_result if last_result else _build_error_result(approach.name, "training failed")
 
     logger.info("running_implementation_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("implementation_phase_started", num_approaches=len(approaches))
@@ -373,6 +419,7 @@ def main(
     max_approaches: int = SETTINGS.max_approaches,
     max_tuning_iterations: int = SETTINGS.max_tuning_iterations,
     max_parallel_agents: int = SETTINGS.max_parallel_agents,
+    max_train_fix_attempts: int = SETTINGS.max_train_fix_attempts,
     primary_metric: str = SETTINGS.default_primary_metric,
     maximize_metric: bool = True,
     run_budget_usd: float = SETTINGS.max_run_budget_usd,
@@ -385,6 +432,7 @@ def main(
         max_approaches=max_approaches,
         max_tuning_iterations=max_tuning_iterations,
         max_parallel_agents=max_parallel_agents,
+        max_train_fix_attempts=max_train_fix_attempts,
         primary_metric=primary_metric,
         maximize_metric=maximize_metric,
         run_budget_usd=run_budget_usd,

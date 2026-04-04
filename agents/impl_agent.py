@@ -13,6 +13,7 @@ from utils.prompting import read_prompt
 from utils.volume_utils import ensure_run_dirs, write_json
 
 _MAX_CODEGEN_RETRIES = 2
+_MAX_FIX_COMPILE_RETRIES = 2
 
 
 def _sanitize_generated_code(code: str) -> str:
@@ -157,6 +158,68 @@ class ImplementationAgent:
                     return FALLBACK_TRAIN_CODE
         return _sanitize_generated_code(last_code) if last_code else FALLBACK_TRAIN_CODE
 
+    async def fix_code_after_failure(
+        self,
+        approach: Approach,
+        dataset_path: str,
+        task_description: str,
+        failed_code: str,
+        runtime_error: str,
+        hyperparameters: Optional[Dict[str, Any]] = None,
+        labels_path: Optional[str] = None,
+        logs_excerpt: Optional[str] = None,
+    ) -> str:
+        """Regenerate training code after a failed execution (runtime or invalid output)."""
+        labels_block = (
+            f"Labels path (IDX1-ubyte, paired with images):\n{labels_path}\n\n"
+            if labels_path
+            else "Labels path: (not provided; infer from task or single-file dataset only)\n\n"
+        )
+        hp = hyperparameters if hyperparameters is not None else approach.hyperparameters
+        base_prompt = (
+            f"{self.prompt_template}\n\n"
+            f"Task:\n{task_description}\n\n"
+            f"Dataset path (images / primary file):\n{dataset_path}\n\n"
+            f"{labels_block}"
+            f"Approach:\n{approach.model_dump_json(indent=2)}\n\n"
+            f"Hyperparameters in effect:\n{json.dumps(hp, indent=2)}\n"
+        )
+        fix_intro = (
+            "\n\n=== FIX FAILED TRAINING RUN ===\n"
+            "The code below was executed and failed. Fix the bug(s) so train() runs successfully.\n"
+            "Preserve the same train(payload: dict) -> dict contract and output rules.\n\n"
+            f"Runtime error:\n{runtime_error}\n"
+        )
+        if logs_excerpt and logs_excerpt.strip():
+            fix_intro += f"\nLog output (excerpt):\n{logs_excerpt[:6000]}\n"
+        fix_intro += f"\nFailed code to correct:\n\n{failed_code}\n"
+
+        last_code = failed_code
+        for attempt in range(_MAX_FIX_COMPILE_RETRIES + 1):
+            prompt = base_prompt + fix_intro
+            if attempt > 0 and last_code:
+                compile_err = _compile_check(last_code)
+                if compile_err:
+                    prompt += (
+                        f"\n\nYour previous fix failed to compile:\n{compile_err}\n"
+                        f"Return the COMPLETE corrected code.\n"
+                    )
+            try:
+                raw = await self.llm_server.generate.remote.aio(
+                    prompt=prompt,
+                    temperature=0.1,
+                    max_tokens=2000,
+                )
+                code = _sanitize_generated_code(raw)
+                compile_err = _compile_check(code)
+                if compile_err is None:
+                    return code
+                last_code = code
+            except Exception:  # noqa: BLE001
+                if attempt == _MAX_FIX_COMPILE_RETRIES:
+                    return _sanitize_generated_code(last_code)
+        return _sanitize_generated_code(last_code) if last_code else failed_code
+
 
 @app.function(
     image=train_image,
@@ -202,7 +265,8 @@ def run_implementation(
 
     metrics = execution.get("metrics", {}) if isinstance(execution, dict) else {}
     logs = execution.get("logs", "No logs captured.")
-    logs_path.write_text(str(logs), encoding="utf-8")
+    logs_str = str(logs)
+    logs_path.write_text(logs_str, encoding="utf-8")
 
     if not checkpoint_path.exists():
         checkpoint_path.write_text("placeholder checkpoint", encoding="utf-8")
@@ -219,6 +283,7 @@ def run_implementation(
 
     data_volume.commit()
 
+    excerpt = logs_str[:8000] if logs_str else None
     result = TrainingResult(
         approach_name=approach_obj.name,
         metrics=metrics,
@@ -226,5 +291,6 @@ def run_implementation(
         logs_path=str(logs_path),
         source_code_path=str(src_path),
         error=error,
+        logs_excerpt=excerpt,
     )
     return result.model_dump()
