@@ -6,7 +6,13 @@ import math
 import re
 from typing import Any, Dict, List, Tuple
 
-from agents import LLMServer, PlanAgent, ReportAgent, TuningAgent, run_implementation
+from agents import (
+    PlanAgent,
+    ReportAgent,
+    TuningAgent,
+    get_llm_server_handle,
+    run_implementation,
+)
 from agents.impl_agent import FALLBACK_TRAIN_CODE, ImplementationAgent
 from config import SETTINGS
 from modal_app import app, base_image, data_volume
@@ -182,7 +188,7 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
         dashboard_hint="streamlit run dashboard.py",
         local_events_dir=str(ev.dir),
     )
-    llm = LLMServer()
+    llm = get_llm_server_handle()
     plan_agent = PlanAgent(llm)
     impl_agent = ImplementationAgent(llm)
     tuning_agent = TuningAgent(llm)
@@ -409,6 +415,15 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                 )
                 tuned_result = await _run_approach(
                     approach, hp_override=attempted_hp, iteration=iteration
+                )
+                latest = tuned_result
+                all_results.append(tuned_result)
+                iterations.append(
+                    TuningIteration(
+                        iteration=iteration,
+                        hyperparameters=attempted_hp,
+                        result=tuned_result,
+                    )
                 )
             except Exception as exc:  # noqa: BLE001
                 err = _build_error_result(approach.name, str(exc))

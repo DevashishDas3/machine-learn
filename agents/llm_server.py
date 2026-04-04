@@ -40,15 +40,21 @@ def _load_diagnostics() -> None:
         if key.startswith(("LLM_", "VLLM_", "HF_", "CUDA")):
             lines.append(f"env {key}={os.environ[key]!r}")
     q = _vllm_quantization()
-    lines.append(f"inferred vLLM quantization={q!r} (if None, full-precision weights — high VRAM)")
+    lines.append(
+        f"inferred vLLM quantization={q!r} (if None, full-precision weights — high VRAM)"
+    )
     try:
         import torch
 
-        lines.append(f"torch={torch.__version__} cuda_available={torch.cuda.is_available()}")
+        lines.append(
+            f"torch={torch.__version__} cuda_available={torch.cuda.is_available()}"
+        )
         if torch.cuda.is_available():
             lines.append(f"cuda_device={torch.cuda.get_device_name(0)!r}")
             free_b, total_b = torch.cuda.mem_get_info()
-            lines.append(f"cuda_mem_get_info free_gib={free_b / 2**30:.2f} total_gib={total_b / 2**30:.2f}")
+            lines.append(
+                f"cuda_mem_get_info free_gib={free_b / 2**30:.2f} total_gib={total_b / 2**30:.2f}"
+            )
     except Exception as exc:  # noqa: BLE001
         lines.append(f"torch_cuda_probe_failed={exc!r}")
     try:
@@ -75,7 +81,7 @@ class LLMServer:
     """vLLM inference server using AsyncLLMEngine for concurrent request handling.
 
     A single GPU container handles all concurrent generate() calls through
-    vLLM's continuous batching — no need for multiple containers or warmup.
+    vLLM's continuous batching.
     """
 
     @modal.enter()
@@ -127,3 +133,22 @@ class LLMServer:
         async for output in self.engine.generate(prompt, params, request_id):
             final_output = output
         return final_output.outputs[0].text
+
+
+def get_llm_server_handle():
+    if SETTINGS.llm_use_deployed_service:
+        try:
+            deployed_cls = modal.Cls.from_name(
+                SETTINGS.llm_service_app_name,
+                SETTINGS.llm_service_class_name,
+                environment_name=SETTINGS.modal_environment,
+            )
+            return deployed_cls()
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[llmserver] using local class fallback; failed to bind deployed cls: {exc!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return LLMServer()
+    return LLMServer()
