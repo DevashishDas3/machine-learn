@@ -42,10 +42,17 @@ def _env_bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     modal_app_name: str = os.getenv("MODAL_APP_NAME", "ml-agent-swarm")
+    llm_service_app_name: str = os.getenv(
+        "LLM_SERVICE_APP_NAME", "ml-agent-llm-service"
+    )
+    llm_service_class_name: str = os.getenv("LLM_SERVICE_CLASS_NAME", "LLMServer")
     modal_volume_name: str = os.getenv("MODAL_VOLUME_NAME", "ml-agent-swarm-data")
     modal_environment: str = os.getenv("MODAL_ENVIRONMENT", "main")
+    llm_use_deployed_service: bool = _env_bool("LLM_USE_DEPLOYED_SERVICE", True)
 
-    llm_model_primary: str = os.getenv("LLM_MODEL_PRIMARY", "Qwen/Qwen2.5-32B-Instruct-AWQ")
+    llm_model_primary: str = os.getenv(
+        "LLM_MODEL_PRIMARY", "Qwen/Qwen2.5-32B-Instruct-AWQ"
+    )
     llm_gpu: str = os.getenv("LLM_GPU", "H100")
     impl_gpu: str = os.getenv("IMPL_GPU", "H100")
 
@@ -62,6 +69,7 @@ class Settings:
     max_parallel_agents: int = _env_int("MAX_PARALLEL_AGENTS", 4)
     llm_concurrent_requests: int = _env_int("LLM_CONCURRENT_REQUESTS", 15)
     max_tuning_iterations: int = _env_int("MAX_TUNING_ITERATIONS", 1)
+    max_train_fix_attempts: int = _env_int("MAX_TRAIN_FIX_ATTEMPTS", 3)
     max_run_budget_usd: float = _env_float("MAX_RUN_BUDGET_USD", 50.0)
 
     default_primary_metric: str = os.getenv("DEFAULT_PRIMARY_METRIC", "accuracy")

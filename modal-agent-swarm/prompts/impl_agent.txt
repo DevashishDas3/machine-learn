@@ -3,6 +3,7 @@ Generate Python training code for one ML approach.
 
 Rules:
 - Return executable Python only, no markdown, no code fences.
+- ALL import statements must appear at the TOP of the file, before the train() function definition.
 - Define exactly ONE function: train(payload: dict) -> dict
 - Use payload keys:
   - dataset_path (str)
@@ -18,25 +19,40 @@ Rules:
   Do NOT silently swallow errors by returning {"metrics": {"accuracy": 0.0}} — that hides the real problem.
 - Write syntactically valid Python: balanced quotes, complete try/except blocks, no bare * unpacking.
 - Do NOT add redundant inline comments. Do NOT repeat comments. Keep code clean and minimal.
-- NEVER append multiple trailing comments to a single line of code.
+- NEVER append multiple trailing comments to a single line of code. No # noqa, # pylint, or # flake8 comments.
+- NEVER make network calls of any kind (no urllib, requests, socket connections, download=True, etc.).
 
-Hyperparameters:
+Imports — CRITICAL RULES:
+- Every name you use must be imported. NEVER use a name that is not explicitly imported at the top.
+- For sklearn: import numpy as np, then import the specific sklearn classes you use. Do NOT import joblib.
+- For pytorch: the first lines of your file must be:
+    import torch
+    import torch.nn as nn
+    import numpy as np
+  Import torchvision only if you use it: import torchvision.models as tv_models
+- DO NOT import os, sys, subprocess, socket, urllib, requests, joblib, distutils, or any other package
+  not listed as available for your framework.
+
+Hyperparameters — CRITICAL RULES:
 - ALWAYS read every tunable value from payload["hyperparameters"].get(key, default_value).
 - NEVER hardcode hyperparameter values (lr, batch_size, num_epochs, etc.) as constants in the function body.
 - Default num_epochs to at most 3 if not in hyperparameters: num_epochs = int(hyper.get("num_epochs", 3))
 - Default batch_size to at least 128: batch_size = int(hyper.get("batch_size", 128))
+- NEVER splat the full hyperparameters dict into a model constructor (e.g. Model(**hyper) is FORBIDDEN).
+  Always extract each parameter by name: lr = float(hyper.get("learning_rate", 0.001))
+  Then pass extracted variables: optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
 Dataset subsampling (REQUIRED for fast evaluation):
 - ALWAYS subsample the loaded dataset before training.
 - Read the cap: max_train_samples = int(hyper.get("max_train_samples", 10000))
-- After loading X and y, immediately apply: idx = numpy.random.permutation(len(X))[:max_train_samples]; X, y = X[idx], y[idx]
+- After loading X and y, immediately apply: idx = np.random.permutation(len(X))[:max_train_samples]; X, y = X[idx], y[idx]
 - This keeps every training run under 60 seconds regardless of dataset size or model complexity.
 - Do NOT skip this step even if the dataset is already small.
 
 For framework "pytorch":
 - Use: device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-- Move model AND all tensors to device: model.to(device), X.to(device), y.to(device)
-- Available packages: torch, torchvision (CUDA 12.4), numpy. Do not import others.
+- Move model AND all tensors to device: model.to(device), X_tensor.to(device), y_tensor.to(device)
+- Available packages: torch, torch.nn, torchvision (CUDA 12.4), numpy. Do not import others.
 - For convolutional models (CNN, ResNet, etc.):
   * ALWAYS use nn.AdaptiveAvgPool2d((1, 1)) before the final classifier layer.
     This eliminates all spatial-dimension mismatches regardless of input size.
@@ -53,11 +69,20 @@ For framework "pytorch":
     single-channel inputs: model.conv1 = nn.Conv2d(1, 64, 3, stride=1, padding=1, bias=False)
 - MNIST images are 28x28 single-channel (1, 28, 28). Reshape accordingly before Conv2d.
 - Train/val split the loaded data (e.g. 80/20); report validation accuracy.
+- Do NOT save checkpoints with torch.save — just return model_checkpoint_path as an empty string "".
 
 For framework "sklearn":
-- Available packages: numpy, pandas, sklearn.
+- Available packages: numpy, pandas, sklearn. Nothing else.
 - Flatten images to (N, H*W), convert to float32, scale to [0, 1] (divide by 255.0).
 - Ensure labels are int64 / compatible with sklearn classifiers.
+- Do NOT save checkpoints — return model_checkpoint_path as an empty string "".
+- When constructing sklearn models, ONLY pass the parameters that model's __init__ accepts.
+  Example for LogisticRegression:
+    solver = str(hyper.get("solver", "lbfgs"))
+    C = float(hyper.get("C", 1.0))
+    max_iter = int(hyper.get("max_iter", 200))
+    clf = LogisticRegression(solver=solver, C=C, max_iter=max_iter, multi_class="auto")
+  Do NOT pass extra keys from hyperparameters that the model does not accept.
 
 MNIST / IDX ubyte (when task or paths mention IDX3 / IDX1 or MNIST files):
 - If payload["labels_path"] is a non-empty string, load data from disk only:

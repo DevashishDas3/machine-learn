@@ -37,6 +37,7 @@ class TrainingResult(BaseModel):
     logs_path: str = ""
     source_code_path: str = ""
     error: Optional[str] = None
+    logs_excerpt: Optional[str] = None
 
     @field_validator("metrics", mode="before")
     @classmethod
@@ -69,6 +70,7 @@ class RunConfig(BaseModel):
     max_approaches: int = 5
     max_tuning_iterations: int = 3
     max_parallel_agents: int = 4
+    max_train_fix_attempts: int = 3
     primary_metric: str = "accuracy"
     maximize_metric: bool = True
     run_budget_usd: float = 25.0

@@ -17,6 +17,25 @@ Speed constraints (IMPORTANT — all training runs must complete within 90 secon
   The generated code will subsample the dataset to this many samples before training.
   This is the primary mechanism for keeping runs fast.
 
+Hyperparameter keys — CRITICAL RULES:
+- Use ONLY valid Python identifiers that exactly match the model's __init__ parameter names.
+- NEVER wrap keys in underscores (no _key_, __key__, _key, key_).
+- NEVER add trailing spaces to any key name.
+- For sklearn models, only include parameters that the model's constructor actually accepts.
+  Examples of CORRECT keys: "C", "kernel", "solver", "n_estimators", "max_iter", "hidden_layer_sizes"
+  Examples of WRONG keys: "_C_", "__kernel__", "_solver_ ", "n_estimators_", "_max_iter"
+- The "max_train_samples" key must be exactly "max_train_samples" with no prefix/suffix/spaces.
+- Do NOT include implementation details like "probability" as a hyperparameter for SVM —
+  just use "kernel", "C", "gamma", and "max_train_samples".
+- Keep hyperparameter dicts small: only 3–6 keys per approach. More keys = more failure surface.
+
+Sklearn hyperparameter guidelines by model:
+- LogisticRegression: use only solver, C, max_iter, max_train_samples
+  (omit multi_class — it was removed in sklearn 1.5; omit n_jobs)
+- RandomForestClassifier: use only n_estimators, max_depth, random_state, max_train_samples
+- SVC: use only kernel, C, gamma, max_train_samples (omit probability, decision_function_shape, etc.)
+- MLPClassifier: use only hidden_layer_sizes (as a list of ints), activation, solver, max_iter, max_train_samples
+
 Target schema:
 {
   "approaches": [
