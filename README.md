@@ -40,6 +40,10 @@ Deploy app resources:
 
 `modal deploy orchestrator.py`
 
+Add files to volume:
+
+modal volume put ml-agent-swarm-data .\train-images.idx3-ubyte /datasets/mnist/train-images.idx3-ubyte
+
 Stream logs:
 
 `modal app logs ml-agent-swarm`
