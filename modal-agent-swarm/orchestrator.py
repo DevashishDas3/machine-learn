@@ -515,6 +515,20 @@ async def _run_pipeline(
 
     # Report initial training results
     n_ok = sum(1 for r in initial_results_by_name.values() if not r.error)
+    initial_training_summary: List[Dict[str, Any]] = []
+    for approach in approaches:
+        initial_result = initial_results_by_name[approach.name]
+        initial_training_summary.append(
+            {
+                "approach": approach.name,
+                "framework": approach.framework,
+                "primary_metric": run_cfg.primary_metric,
+                "initial": initial_result.metrics.get(run_cfg.primary_metric),
+                "best": initial_result.metrics.get(run_cfg.primary_metric),
+                "rounds": [],
+            }
+        )
+
     dash_msg(
         "agent",
         f"Initial training complete: {n_ok}/{len(approaches)} successful",
@@ -525,6 +539,7 @@ async def _run_pipeline(
         "complete",
         metrics={"successful_runs": n_ok},
         code_artifacts=implement_code_artifacts,
+        tuning_summary=initial_training_summary,
     )
 
     # TuningAgent phase
@@ -533,6 +548,43 @@ async def _run_pipeline(
 
     logger.info("running_tuning_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("tuning_phase_started")
+
+    tuning_progress_by_name: Dict[str, Dict[str, Any]] = {
+        approach.name: {
+            "approach": approach.name,
+            "framework": approach.framework,
+            "primary_metric": run_cfg.primary_metric,
+            "initial": initial_results_by_name[approach.name].metrics.get(
+                run_cfg.primary_metric
+            ),
+            "best": initial_results_by_name[approach.name].metrics.get(
+                run_cfg.primary_metric
+            ),
+            "rounds": [],
+        }
+        for approach in approaches
+    }
+    tuning_progress_lock = asyncio.Lock()
+
+    def _ordered_tuning_progress() -> List[Dict[str, Any]]:
+        ordered: List[Dict[str, Any]] = []
+        for approach in approaches:
+            item = tuning_progress_by_name.get(approach.name)
+            if not item:
+                continue
+            ordered.append(
+                {
+                    "approach": item["approach"],
+                    "framework": item["framework"],
+                    "primary_metric": item["primary_metric"],
+                    "initial": item["initial"],
+                    "best": item["best"],
+                    "rounds": [dict(round_item) for round_item in item["rounds"]],
+                }
+            )
+        return ordered
+
+    dash_stage("tune_agent", "active", tuning_summary=_ordered_tuning_progress())
 
     async def tune_single(
         approach: Approach, current: TrainingResult
@@ -609,6 +661,40 @@ async def _run_pipeline(
                     result=tuned_result,
                 )
             )
+
+            async with tuning_progress_lock:
+                progress_item = tuning_progress_by_name.get(approach.name)
+                if progress_item is not None:
+                    progress_item["rounds"].append(
+                        {
+                            "iteration": iteration,
+                            "hyperparameters": attempted_hp,
+                            "metrics": tuned_result.metrics,
+                            "error": tuned_result.error,
+                        }
+                    )
+                    metric_value = tuned_result.metrics.get(run_cfg.primary_metric)
+                    current_best = progress_item.get("best")
+                    if isinstance(metric_value, (int, float)):
+                        if (
+                            current_best is None
+                            or not isinstance(current_best, (int, float))
+                            or (
+                                run_cfg.maximize_metric
+                                and metric_value > float(current_best)
+                            )
+                            or (
+                                not run_cfg.maximize_metric
+                                and metric_value < float(current_best)
+                            )
+                        ):
+                            progress_item["best"] = float(metric_value)
+
+                dash_stage(
+                    "tune_agent",
+                    "active",
+                    tuning_summary=_ordered_tuning_progress(),
+                )
 
             history_record = TuningHistoryRecord(
                 run_id=run_id,

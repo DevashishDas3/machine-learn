@@ -1016,6 +1016,37 @@ function FlowTree({
                     </div>
                   )}
 
+                  {stage.id === "initial_train" && tuningSummary.length > 0 && (
+                    <div className="px-4 pb-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
+                      {tuningSummary.map((summary) => {
+                        const primaryMetric = summary.primary_metric || "accuracy";
+                        const initialScore = scoreToPercent(summary.initial);
+                        const maxScore = initialScore !== null ? Math.max(100, initialScore) : 100;
+                        return (
+                          <div key={summary.approach} className="border border-white/10 bg-white/[0.02] p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="font-mono text-xs text-paper">{summary.approach}</div>
+                              <div className="font-mono text-[10px] text-paper/50">{primaryMetric}</div>
+                            </div>
+
+                            <div>
+                              <div className="flex items-center justify-between font-mono text-[10px] text-paper/45 mb-1">
+                                <span>Initial</span>
+                                <span>{initialScore !== null ? `${initialScore.toFixed(2)}%` : "-"}</span>
+                              </div>
+                              <div className="h-2 bg-white/10 overflow-hidden">
+                                <div
+                                  className="h-full bg-lime-400"
+                                  style={{ width: `${Math.max(2, initialScore !== null ? (initialScore / maxScore) * 100 : 2)}%` }}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {stage.id === "tune_agent" && tuningSummary.length > 0 && (
                     <div className="px-4 pb-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
                       {tuningSummary.map((summary) => {
