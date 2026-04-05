@@ -492,6 +492,17 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
             if result is best:
                 best_hyperparameters = hp
                 break
+
+        base_code = generated_code_by_name.get(approach.name, FALLBACK_TRAIN_CODE)
+        final_code = _render_code_with_best_hyperparameters(
+            base_code, best_hyperparameters
+        )
+        ev.emit(
+            "code_finalized",
+            approach=approach.name,
+            framework=approach.framework,
+            code_preview=final_code[:20_000],
+        )
         return iterations, best, best_hyperparameters
 
     tuning_tasks = [tune_single(a, initial_results_by_name[a.name]) for a in approaches]
@@ -534,21 +545,6 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
         f"Recommended approach: {best_overall.approach_name} "
         f"based on best `{run_cfg.primary_metric}` = {best_overall.metrics.get(run_cfg.primary_metric, 'n/a')}."
     )
-
-    for approach in approaches:
-        base_code = generated_code_by_name.get(approach.name, FALLBACK_TRAIN_CODE)
-        final_code = _render_code_with_best_hyperparameters(
-            base_code,
-            best_hyperparameters_by_name.get(
-                approach.name, dict(approach.hyperparameters)
-            ),
-        )
-        ev.emit(
-            "code_finalized",
-            approach=approach.name,
-            framework=approach.framework,
-            code_preview=final_code[:20_000],
-        )
 
     logger.info("running_report_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("report_phase_started")
