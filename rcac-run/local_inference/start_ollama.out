@@ -1,0 +1,11 @@
+Ollama API Endpoint hosted on: 172.18.49.213:11434
+Couldn't find '/home/li5042/.ollama/id_ed25519'. Generating new private key.
+Your new public key is: 
+
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH6zjTBwRM4CEWoxc+babolPCyOBfvtMzGmDqnfUAAFi
+
+[GIN] 2026/04/04 - 17:58:32 | 200 |    6.452944ms |       127.0.0.1 | HEAD     "/"
+[GIN] 2026/04/04 - 17:58:32 | 404 |    1.499869ms |       127.0.0.1 | POST     "/api/show"
+[GIN] 2026/04/04 - 17:59:40 | 200 |          1m7s |       127.0.0.1 | POST     "/api/pull"
+[GIN] 2026/04/04 - 17:59:40 | 200 |  112.063266ms |       127.0.0.1 | POST     "/api/show"
+[GIN] 2026/04/04 - 17:59:47 | 200 |  6.968672558s |       127.0.0.1 | POST     "/api/generate"
