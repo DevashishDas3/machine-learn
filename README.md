@@ -62,7 +62,7 @@ Stream logs:
 
 ## LLM service settings
 
-- `LLM_USE_DEPLOYED_SERVICE` (default `true`): if `true`, orchestrator uses deployed service via `modal.Cls.from_name(...)`.
+- Orchestrator always uses deployed LLM service via `modal.Cls.from_name(...)`.
 - `LLM_SERVICE_APP_NAME` (default `ml-agent-llm-service`): deployed LLM app name.
 - `LLM_SERVICE_CLASS_NAME` (default `LLMServer`): deployed class name inside the LLM service app.
 - `MODAL_ENVIRONMENT` (default `main`): environment used when resolving the deployed class.

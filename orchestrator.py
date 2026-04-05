@@ -359,8 +359,9 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
         approach: Approach, current: TrainingResult
     ) -> Tuple[List[TuningIteration], TrainingResult, Dict[str, Any]]:
         iterations: List[TuningIteration] = []
-        all_results = [current]
-        candidate_hyperparams: List[Dict[str, Any]] = [dict(approach.hyperparameters)]
+        candidate_results: List[Tuple[TrainingResult, Dict[str, Any]]] = [
+            (current, dict(approach.hyperparameters))
+        ]
         latest = current
         cross_run_history = load_tuning_history(approach.name, limit=80)
         in_run_history: List[TuningHistoryRecord] = [
@@ -416,22 +417,12 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                 tuned_result = await _run_approach(
                     approach, hp_override=attempted_hp, iteration=iteration
                 )
-                latest = tuned_result
-                all_results.append(tuned_result)
-                iterations.append(
-                    TuningIteration(
-                        iteration=iteration,
-                        hyperparameters=attempted_hp,
-                        result=tuned_result,
-                    )
-                )
             except Exception as exc:  # noqa: BLE001
                 err = _build_error_result(approach.name, str(exc))
                 tuned_result = err
 
             latest = tuned_result
-            all_results.append(tuned_result)
-            candidate_hyperparams.append(attempted_hp)
+            candidate_results.append((tuned_result, attempted_hp))
             iterations.append(
                 TuningIteration(
                     iteration=iteration,
@@ -492,11 +483,15 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
                     f"[TUNING][{approach.name}] iter={iteration} error={_snip(tuned_result.error)}"
                 )
 
+        all_results = [result for result, _ in candidate_results]
         best = _pick_best_result(
             all_results, run_cfg.primary_metric, run_cfg.maximize_metric
         )
-        best_index = all_results.index(best)
-        best_hyperparameters = candidate_hyperparams[best_index]
+        best_hyperparameters = dict(approach.hyperparameters)
+        for result, hp in candidate_results:
+            if result is best:
+                best_hyperparameters = hp
+                break
         return iterations, best, best_hyperparameters
 
     tuning_tasks = [tune_single(a, initial_results_by_name[a.name]) for a in approaches]
@@ -508,9 +503,7 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
         initial_result = initial_results_by_name[approach.name]
         if isinstance(tuned, Exception):
             fallback_best = initial_result
-            best_hyperparameters_by_name[approach.name] = dict(
-                approach.hyperparameters
-            )
+            best_hyperparameters_by_name[approach.name] = dict(approach.hyperparameters)
             approach_runs.append(
                 ApproachRun(
                     approach=approach,

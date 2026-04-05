@@ -136,19 +136,18 @@ class LLMServer:
 
 
 def get_llm_server_handle():
-    if SETTINGS.llm_use_deployed_service:
-        try:
-            deployed_cls = modal.Cls.from_name(
-                SETTINGS.llm_service_app_name,
-                SETTINGS.llm_service_class_name,
-                environment_name=SETTINGS.modal_environment,
-            )
-            return deployed_cls()
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"[llmserver] using local class fallback; failed to bind deployed cls: {exc!r}",
-                file=sys.stderr,
-                flush=True,
-            )
-            return LLMServer()
-    return LLMServer()
+    try:
+        deployed_cls = modal.Cls.from_name(
+            SETTINGS.llm_service_app_name,
+            SETTINGS.llm_service_class_name,
+            environment_name=SETTINGS.modal_environment,
+        )
+        return deployed_cls()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "Failed to bind deployed LLM service "
+            f"app={SETTINGS.llm_service_app_name!r} "
+            f"class={SETTINGS.llm_service_class_name!r} "
+            f"environment={SETTINGS.modal_environment!r}. "
+            "This pipeline is configured to always use the deployed LLM service."
+        ) from exc
