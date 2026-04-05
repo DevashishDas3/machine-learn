@@ -145,6 +145,12 @@ def get_llm_server_handle():
             )
             return deployed_cls()
         except Exception as exc:  # noqa: BLE001
+            if not SETTINGS.llm_allow_local_fallback:
+                raise RuntimeError(
+                    "Failed to bind deployed LLM service and local fallback is disabled. "
+                    f"app={SETTINGS.llm_service_app_name} class={SETTINGS.llm_service_class_name} "
+                    f"env={SETTINGS.modal_environment} err={exc!r}"
+                ) from exc
             print(
                 f"[llmserver] using local class fallback; failed to bind deployed cls: {exc!r}",
                 file=sys.stderr,

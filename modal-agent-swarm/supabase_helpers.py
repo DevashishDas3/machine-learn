@@ -11,13 +11,13 @@ Environment Variables Required:
 
 Usage:
     from supabase_helpers import update_flowchart_stage, complete_run, add_chat_message
-    
+
     # Update current stage
     update_flowchart_stage(run_id, "plan_agent", "active")
-    
+
     # Add chat message
     add_chat_message(run_id, "agent", "Planning optimal architecture...")
-    
+
     # Complete run with final report
     complete_run(run_id, accuracy=0.95, loss=0.05, ...)
 """
@@ -33,12 +33,12 @@ def get_supabase_client() -> Client:
     """Create Supabase client using service role key."""
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-    
+
     if not url or not key:
         raise ValueError(
             "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY environment variables required"
         )
-    
+
     return create_client(url, key)
 
 
@@ -46,27 +46,33 @@ def create_run(
     user_id: str,
     name: str,
     initial_message: Optional[str] = None,
+    run_data: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Create a new swarm run record.
-    
+
     Args:
         user_id: The authenticated user's ID
         name: Display name for the run (e.g., "MNIST Classification")
         initial_message: Optional initial chat message
-        
+        run_data: Optional metadata about the run request
+
     Returns:
         The created run ID
     """
     supabase = get_supabase_client()
-    
+
     # Initialize flowchart data structure
     flowchart_data = {
         "stages": [
             {"id": "prepare_dataset", "label": "Prepare Dataset", "status": "pending"},
             {"id": "load_modal", "label": "Load to Modal Volume", "status": "pending"},
             {"id": "plan_agent", "label": "PlanAgent", "status": "pending"},
-            {"id": "implement_agent", "label": "ImplementationAgent", "status": "pending"},
+            {
+                "id": "implement_agent",
+                "label": "ImplementationAgent",
+                "status": "pending",
+            },
             {"id": "tune_agent", "label": "TuningAgent", "status": "pending"},
             {"id": "report_agent", "label": "ReportAgent", "status": "pending"},
         ],
@@ -78,17 +84,19 @@ def create_run(
             {"from": "tune_agent", "to": "report_agent", "active": False},
         ],
     }
-    
+
     chat_messages = []
     if initial_message:
-        chat_messages.append({
-            "id": f"msg_{datetime.utcnow().timestamp()}",
-            "role": "system",
-            "content": initial_message,
-            "timestamp": datetime.utcnow().isoformat(),
-            "stage": "init",
-        })
-    
+        chat_messages.append(
+            {
+                "id": f"msg_{datetime.utcnow().timestamp()}",
+                "role": "system",
+                "content": initial_message,
+                "timestamp": datetime.utcnow().isoformat(),
+                "stage": "init",
+            }
+        )
+
     data = {
         "user_id": user_id,
         "name": name,
@@ -97,8 +105,9 @@ def create_run(
         "flowchart_data": flowchart_data,
         "final_report": None,
         "chat_messages": chat_messages,
+        "run_data": run_data or {},
     }
-    
+
     result = supabase.table("swarm_runs").insert(data).execute()
     return result.data[0]["id"]
 
@@ -112,7 +121,7 @@ def update_flowchart_stage(
 ) -> None:
     """
     Update a specific stage in the flowchart.
-    
+
     Args:
         run_id: The swarm run ID
         stage_id: Stage identifier (e.g., "plan_agent", "implement_agent")
@@ -121,11 +130,17 @@ def update_flowchart_stage(
         metrics: Optional metrics dict for the stage
     """
     supabase = get_supabase_client()
-    
+
     # Fetch current flowchart data
-    result = supabase.table("swarm_runs").select("flowchart_data").eq("id", run_id).single().execute()
+    result = (
+        supabase.table("swarm_runs")
+        .select("flowchart_data")
+        .eq("id", run_id)
+        .single()
+        .execute()
+    )
     flowchart_data = result.data["flowchart_data"] or {}
-    
+
     # Update the specific stage
     stages = flowchart_data.get("stages", [])
     for stage in stages:
@@ -140,7 +155,7 @@ def update_flowchart_stage(
             elif status in ("complete", "error"):
                 stage["completedAt"] = datetime.utcnow().isoformat()
             break
-    
+
     # Update connections based on stage status
     connections = flowchart_data.get("connections", [])
     for conn in connections:
@@ -148,17 +163,21 @@ def update_flowchart_stage(
         source_stage = next((s for s in stages if s["id"] == conn["from"]), None)
         if source_stage and source_stage.get("status") == "complete":
             conn["active"] = True
-    
+
     flowchart_data["stages"] = stages
     flowchart_data["connections"] = connections
-    
+
     # Update database
-    supabase.table("swarm_runs").update({
-        "flowchart_data": flowchart_data,
-        "current_phase": stage_id,
-        "status": "running" if status == "active" else ("error" if status == "error" else "running"),
-        "updated_at": datetime.utcnow().isoformat(),
-    }).eq("id", run_id).execute()
+    supabase.table("swarm_runs").update(
+        {
+            "flowchart_data": flowchart_data,
+            "current_phase": stage_id,
+            "status": "running"
+            if status == "active"
+            else ("error" if status == "error" else "running"),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+    ).eq("id", run_id).execute()
 
 
 def add_chat_message(
@@ -169,7 +188,7 @@ def add_chat_message(
 ) -> None:
     """
     Add a chat message to the run's message history.
-    
+
     Args:
         run_id: The swarm run ID
         role: Message role ("system", "agent", "user")
@@ -177,25 +196,35 @@ def add_chat_message(
         stage: Optional stage identifier
     """
     supabase = get_supabase_client()
-    
+
     # Fetch current messages
-    result = supabase.table("swarm_runs").select("chat_messages").eq("id", run_id).single().execute()
+    result = (
+        supabase.table("swarm_runs")
+        .select("chat_messages")
+        .eq("id", run_id)
+        .single()
+        .execute()
+    )
     messages = result.data["chat_messages"] or []
-    
+
     # Add new message
-    messages.append({
-        "id": f"msg_{datetime.utcnow().timestamp()}",
-        "role": role,
-        "content": content,
-        "timestamp": datetime.utcnow().isoformat(),
-        "stage": stage,
-    })
-    
+    messages.append(
+        {
+            "id": f"msg_{datetime.utcnow().timestamp()}",
+            "role": role,
+            "content": content,
+            "timestamp": datetime.utcnow().isoformat(),
+            "stage": stage,
+        }
+    )
+
     # Update database
-    supabase.table("swarm_runs").update({
-        "chat_messages": messages,
-        "updated_at": datetime.utcnow().isoformat(),
-    }).eq("id", run_id).execute()
+    supabase.table("swarm_runs").update(
+        {
+            "chat_messages": messages,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+    ).eq("id", run_id).execute()
 
 
 def complete_run(
@@ -209,7 +238,7 @@ def complete_run(
 ) -> None:
     """
     Mark the run as complete and set the final report.
-    
+
     Args:
         run_id: The swarm run ID
         accuracy: Final model accuracy (0-1)
@@ -220,7 +249,7 @@ def complete_run(
         report: Full markdown report
     """
     supabase = get_supabase_client()
-    
+
     # Build final report
     final_report = {
         "accuracy": accuracy,
@@ -230,52 +259,67 @@ def complete_run(
         "recommendation": recommendation,
         "report": report,
     }
-    
+
     # Update all stages to complete
-    result = supabase.table("swarm_runs").select("flowchart_data").eq("id", run_id).single().execute()
+    result = (
+        supabase.table("swarm_runs")
+        .select("flowchart_data")
+        .eq("id", run_id)
+        .single()
+        .execute()
+    )
     flowchart_data = result.data["flowchart_data"] or {}
-    
+
     for stage in flowchart_data.get("stages", []):
         if stage["status"] != "error":
             stage["status"] = "complete"
             if not stage.get("completedAt"):
                 stage["completedAt"] = datetime.utcnow().isoformat()
-    
+
     for conn in flowchart_data.get("connections", []):
         conn["active"] = True
-    
+
     # Update database
-    supabase.table("swarm_runs").update({
-        "status": "complete",
-        "current_phase": "complete",
-        "flowchart_data": flowchart_data,
-        "final_report": final_report,
-        "updated_at": datetime.utcnow().isoformat(),
-    }).eq("id", run_id).execute()
+    supabase.table("swarm_runs").update(
+        {
+            "status": "complete",
+            "current_phase": "complete",
+            "flowchart_data": flowchart_data,
+            "final_report": final_report,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+    ).eq("id", run_id).execute()
 
 
 def fail_run(run_id: str, error_message: str, failed_stage: str) -> None:
     """
     Mark the run as failed.
-    
+
     Args:
         run_id: The swarm run ID
         error_message: Error description
         failed_stage: The stage that failed
     """
     supabase = get_supabase_client()
-    
+
     # Update the failed stage
     update_flowchart_stage(run_id, failed_stage, "error", details=error_message)
-    
+
     # Add error message to chat
-    add_chat_message(run_id, "system", f"❌ Error in {failed_stage}: {error_message}", stage=failed_stage)
-    
+    add_chat_message(
+        run_id,
+        "system",
+        f"❌ Error in {failed_stage}: {error_message}",
+        stage=failed_stage,
+    )
+
     # Update run status
-    supabase.table("swarm_runs").update({
-        "status": "error",
-        "updated_at": datetime.utcnow().isoformat(),
-    }).eq("id", run_id).execute()
+    supabase.table("swarm_runs").update(
+        {
+            "status": "error",
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+    ).eq("id", run_id).execute()
 
 
 # ============================================

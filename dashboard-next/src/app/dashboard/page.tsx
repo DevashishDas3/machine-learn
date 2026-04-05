@@ -602,7 +602,7 @@ function ResultsPanel({ report }: { report: FinalReport | null }) {
             Final Accuracy
           </p>
           <p className="font-mono text-xl text-green-400">
-            {report.accuracy !== undefined
+            {typeof report.accuracy === "number"
               ? `${(report.accuracy * 100).toFixed(2)}%`
               : "—"}
           </p>
@@ -614,7 +614,7 @@ function ResultsPanel({ report }: { report: FinalReport | null }) {
             Training Loss
           </p>
           <p className="font-mono text-xl text-paper">
-            {report.loss !== undefined ? report.loss.toFixed(4) : "—"}
+            {typeof report.loss === "number" ? report.loss.toFixed(4) : "—"}
           </p>
         </div>
 
@@ -624,7 +624,7 @@ function ResultsPanel({ report }: { report: FinalReport | null }) {
             Total Time (GPU)
           </p>
           <p className="font-mono text-xl text-azure">
-            {report.totalTimeGpu !== undefined
+            {typeof report.totalTimeGpu === "number"
               ? `${report.totalTimeGpu.toFixed(1)}s`
               : "—"}
           </p>
@@ -1044,36 +1044,19 @@ export default function DashboardPage() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-obsidian">
-      {/* Collapsible Sidebar */}
-      <AnimatePresence initial={false}>
-        {sidebarOpen && (
-          <motion.aside
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 260, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: "easeInOut" }}
-            className="shrink-0 border-r border-white/10 flex flex-col overflow-hidden"
-          >
-            {/* Sidebar Header */}
-            <div className="px-4 py-4 border-b border-white/10 flex items-center justify-between">
-              <span className="font-mono text-sm">
-                <span className="text-azure">machine</span>
-                <span className="text-paper/60">(</span>
-                <span className="text-paper">learn</span>
-                <span className="text-paper/60">);</span>
-              </span>
-            </div>
+      {/* Sidebar */}
+      <aside className="w-56 shrink-0 border-r border-white/10 flex flex-col">
+        {/* Sidebar Header */}
+        <div className="px-4 py-4 border-b border-white/10">
+          <span className="font-mono text-sm">
+            <span className="text-azure">machine</span>
+            <span className="text-paper/60">(</span>
+            <span className="text-paper">learn</span>
+            <span className="text-paper/60">);</span>
+          </span>
+        </div>
 
-            {/* New Chat Button */}
-            <div className="px-3 py-3 border-b border-white/10">
-              <button
-                onClick={handleNewChat}
-                className="w-full flex items-center gap-2 px-3 py-2 border border-white/10 font-mono text-xs text-paper/80 hover:text-paper hover:bg-white/5 transition-colors"
-              >
-                <NewChatIcon className="w-4 h-4" />
-                <span>New Task</span>
-              </button>
-            </div>
+        <NewRunForm onStarted={(newRunId) => setSelectedRunId(newRunId)} />
 
             {/* Runs List */}
             <div className="flex-1 overflow-y-auto py-2">
@@ -1316,5 +1299,136 @@ export default function DashboardPage() {
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function NewRunForm({
+  onStarted,
+}: {
+  onStarted: (swarmRunId: string) => void;
+}) {
+  const [runName, setRunName] = useState("");
+  const [taskDescription, setTaskDescription] = useState("");
+  const [datasetFile, setDatasetFile] = useState<File | null>(null);
+  const [labelsFile, setLabelsFile] = useState<File | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      setError(null);
+
+      if (!taskDescription.trim()) {
+        setError("Task prompt is required.");
+        return;
+      }
+      if (!datasetFile) {
+        setError("Dataset file is required.");
+        return;
+      }
+      if (!labelsFile) {
+        setError("Labels file is required.");
+        return;
+      }
+
+      try {
+        setIsSubmitting(true);
+        const formData = new FormData();
+        formData.append("runName", runName.trim());
+        formData.append("taskDescription", taskDescription.trim());
+        formData.append("dataset", datasetFile);
+        formData.append("labels", labelsFile);
+
+        const res = await fetch("/api/runs/start", {
+          method: "POST",
+          body: formData,
+        });
+        const payload = await res.json();
+
+        if (!res.ok) {
+          const detailText =
+            payload && typeof payload === "object" && "details" in payload && payload.details
+              ? ` ${String(payload.details)}`
+              : "";
+          throw new Error(`${payload.error || "Failed to start run."}${detailText}`);
+        }
+
+        onStarted(payload.swarmRunId);
+        setRunName("");
+        setTaskDescription("");
+        setDatasetFile(null);
+        setLabelsFile(null);
+      } catch (submitError) {
+        const message = submitError instanceof Error ? submitError.message : "Failed to start run.";
+        setError(message);
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [datasetFile, labelsFile, onStarted, runName, taskDescription]
+  );
+
+  return (
+    <form onSubmit={handleSubmit} className="px-4 py-4 border-b border-white/10 space-y-3">
+      <p className="font-mono text-[10px] uppercase tracking-widest text-paper/40">
+        Start New Run
+      </p>
+
+      <input
+        type="text"
+        value={runName}
+        onChange={(e) => setRunName(e.target.value)}
+        placeholder="Run name (optional)"
+        className="w-full border border-white/20 bg-transparent px-2 py-2 font-mono text-[11px] text-paper placeholder:text-paper/30 focus:border-azure focus:outline-none"
+      />
+
+      <textarea
+        value={taskDescription}
+        onChange={(e) => setTaskDescription(e.target.value)}
+        placeholder="Task prompt"
+        required
+        rows={3}
+        className="w-full resize-none border border-white/20 bg-transparent px-2 py-2 font-mono text-[11px] text-paper placeholder:text-paper/30 focus:border-azure focus:outline-none"
+      />
+
+      <div className="space-y-2">
+        <label className="block font-mono text-[10px] uppercase tracking-widest text-paper/40">
+          Dataset File
+        </label>
+        <input
+          type="file"
+          required
+          onChange={(e) => setDatasetFile(e.target.files?.[0] ?? null)}
+          className="w-full border border-white/20 bg-transparent px-2 py-1.5 font-mono text-[11px] text-paper file:mr-2 file:border-0 file:bg-azure file:px-2 file:py-1 file:font-mono file:text-[10px] file:uppercase file:tracking-widest file:text-obsidian"
+        />
+      </div>
+
+      <div className="space-y-2">
+        <label className="block font-mono text-[10px] uppercase tracking-widest text-paper/40">
+          Labels File
+        </label>
+        <input
+          type="file"
+          required
+          onChange={(e) => setLabelsFile(e.target.files?.[0] ?? null)}
+          className="w-full border border-white/20 bg-transparent px-2 py-1.5 font-mono text-[11px] text-paper file:mr-2 file:border-0 file:bg-azure file:px-2 file:py-1 file:font-mono file:text-[10px] file:uppercase file:tracking-widest file:text-obsidian"
+        />
+      </div>
+
+      {error && (
+        <p className="border border-red-500/50 px-2 py-2 font-mono text-[10px] text-red-400">
+          {error}
+        </p>
+      )}
+
+      <button
+        type="submit"
+        disabled={isSubmitting}
+        className="w-full border border-azure bg-azure px-3 py-2 font-mono text-[10px] uppercase tracking-widest text-obsidian transition-colors hover:bg-azure/90 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {isSubmitting ? "Starting..." : "Start Run"}
+      </button>
+    </form>
   );
 }
