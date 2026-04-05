@@ -8,6 +8,7 @@ Automated ML approach planning, implementation, tuning, and reporting on Modal G
 ├── modal-agent-swarm/       # Modal backend (Python)
 │   ├── modal_app.py         # Modal app and shared resource definitions
 │   ├── orchestrator.py      # 4-phase async pipeline (Plan → Implement → Tune → Report)
+│   ├── api_endpoints.py     # FastAPI endpoints for frontend integration
 │   ├── agents/              # LLM server and agent modules
 │   ├── schemas/             # Pydantic contracts for all phase handoffs
 │   ├── supabase_helpers.py  # Supabase integration for dashboard updates
@@ -46,9 +47,18 @@ modal setup
 # Create Supabase secret
 modal secret create supabase-secrets SUPABASE_URL="https://your-project.supabase.co" SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
 
-# Deploy
+# Deploy the API endpoint (required for frontend integration)
+modal deploy api_endpoints.py
+
+# Deploy the orchestrator
 modal deploy orchestrator.py
 ```
+
+After deploying `api_endpoints.py`, Modal will output a URL like:
+```
+https://your-workspace--ml-agent-swarm-api.modal.run
+```
+Copy this URL for the frontend configuration.
 
 ### 2. Setup Frontend (Next.js)
 
@@ -58,9 +68,13 @@ cd dashboard-next
 # Install dependencies
 npm install
 
-# Copy environment file and add your Supabase keys
+# Copy environment file and add your keys
 cp .env.local.example .env.local
-# Edit .env.local with your Supabase URL and anon key
+
+# Edit .env.local with:
+# - NEXT_PUBLIC_SUPABASE_URL
+# - NEXT_PUBLIC_SUPABASE_ANON_KEY
+# - NEXT_PUBLIC_MODAL_WEBHOOK_URL (from api_endpoints.py deployment)
 
 # Start dev server
 npm run dev
@@ -72,15 +86,16 @@ Run the SQL from `supabase/migrations/20260404_init.sql` in your Supabase SQL Ed
 
 ## Testing the Dashboard
 
-### Option A: Frontend Test (Recommended)
+### Option A: Full End-to-End Test (Recommended)
 
-1. Start the frontend: `npm run dev` (in dashboard-next)
-2. Go to http://localhost:3000/signup and create an account
-3. You'll be redirected to the dashboard
-4. Type a task description like "Classify MNIST digits" and press Enter
-5. Watch the pipeline execute with live updates!
+1. Deploy the Modal API: `modal deploy api_endpoints.py`
+2. Copy the Modal URL to `.env.local` as `NEXT_PUBLIC_MODAL_WEBHOOK_URL`
+3. Start the frontend: `npm run dev` (in dashboard-next)
+4. Go to http://localhost:3000/signup and create an account
+5. Type a task description like "Classify MNIST digits" and press Enter
+6. Watch the pipeline execute with live updates on the flowchart!
 
-### Option B: CLI Test Script
+### Option B: CLI Test Script (Without Modal)
 
 1. Start the frontend: `npm run dev`
 2. Create an account at http://localhost:3000/signup

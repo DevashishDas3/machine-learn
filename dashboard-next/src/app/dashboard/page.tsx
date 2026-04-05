@@ -864,22 +864,26 @@ export default function DashboardPage() {
     if (!inputValue.trim() || !userId || isSubmitting) return;
 
     setIsSubmitting(true);
+    
+    // Generate run ID upfront so we can track it
+    const runId = crypto.randomUUID();
+    const runName = inputValue.length > 50 
+      ? inputValue.slice(0, 47) + "..." 
+      : inputValue;
+    
     try {
-      // Create a new run in Supabase
-      const runName = inputValue.length > 50 
-        ? inputValue.slice(0, 47) + "..." 
-        : inputValue;
-      
-      const { data, error } = await supabase
+      // Step 1: Create a placeholder run in Supabase immediately
+      const { data: runData, error: runError } = await supabase
         .from("swarm_runs")
         .insert({
+          id: runId,
           user_id: userId,
           name: runName,
-          status: "pending",
+          status: "running",
           current_phase: "prepare_dataset",
           flowchart_data: {
             stages: [
-              { id: "prepare_dataset", label: "Prepare Dataset", status: "pending" },
+              { id: "prepare_dataset", label: "Prepare Dataset", status: "active" },
               { id: "load_modal", label: "Load to Modal Volume", status: "pending" },
               { id: "plan_agent", label: "PlanAgent", status: "pending" },
               { id: "implement_agent", label: "ImplementationAgent", status: "pending" },
@@ -904,7 +908,7 @@ export default function DashboardPage() {
             {
               id: crypto.randomUUID(),
               role: "system",
-              content: "Initializing ML agent swarm...",
+              content: "Connecting to Modal GPU cluster...",
               timestamp: new Date().toISOString(),
               stage: "prepare_dataset",
             },
@@ -914,15 +918,106 @@ export default function DashboardPage() {
         .select()
         .single();
 
-      if (error) {
-        console.error("Error creating run:", error);
-      } else if (data) {
-        setSelectedRunId(data.id);
-        setInputValue("");
-        setUploadedFile(null);
+      if (runError) {
+        console.error("Error creating run in Supabase:", runError);
+        throw new Error("Failed to create run record");
       }
+
+      // Immediately select the new run to show it
+      setSelectedRunId(runId);
+      setInputValue("");
+
+      // Step 2: Call Modal API endpoint to trigger the pipeline
+      const modalWebhookUrl = process.env.NEXT_PUBLIC_MODAL_WEBHOOK_URL;
+      
+      if (!modalWebhookUrl) {
+        console.warn("NEXT_PUBLIC_MODAL_WEBHOOK_URL not set, run created but pipeline not triggered");
+        // Update the run to show it's waiting
+        await supabase
+          .from("swarm_runs")
+          .update({
+            chat_messages: [
+              ...(runData?.chat_messages || []),
+              {
+                id: crypto.randomUUID(),
+                role: "system",
+                content: "⚠️ Modal webhook not configured. Run created but pipeline not started.",
+                timestamp: new Date().toISOString(),
+                stage: "prepare_dataset",
+              },
+            ],
+          })
+          .eq("id", runId);
+        return;
+      }
+
+      // Construct FormData for multipart upload
+      const formData = new FormData();
+      formData.append("task_description", inputValue);
+      formData.append("user_id", userId);
+      formData.append("run_id", runId);
+      
+      // Add file if uploaded
+      if (uploadedFile) {
+        formData.append("dataset_file", uploadedFile);
+      }
+
+      // Fire request to Modal (fire-and-forget pattern)
+      const response = await fetch(`${modalWebhookUrl}/api/runs/create`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `Modal API error: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log("Pipeline started:", result);
+
+      // Update chat with confirmation
+      await supabase
+        .from("swarm_runs")
+        .update({
+          chat_messages: [
+            ...(runData?.chat_messages || []),
+            {
+              id: crypto.randomUUID(),
+              role: "system",
+              content: `Pipeline triggered on Modal. Dataset: ${result.dataset_path}`,
+              timestamp: new Date().toISOString(),
+              stage: "prepare_dataset",
+            },
+          ],
+        })
+        .eq("id", runId);
+
+      setUploadedFile(null);
+
     } catch (err) {
       console.error("Error submitting task:", err);
+      
+      // Update the run to show error if it was created
+      try {
+        await supabase
+          .from("swarm_runs")
+          .update({
+            status: "error",
+            chat_messages: [
+              {
+                id: crypto.randomUUID(),
+                role: "system",
+                content: `❌ Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+                timestamp: new Date().toISOString(),
+                stage: "error",
+              },
+            ],
+          })
+          .eq("id", runId);
+      } catch {
+        // Ignore update errors
+      }
     } finally {
       setIsSubmitting(false);
     }
