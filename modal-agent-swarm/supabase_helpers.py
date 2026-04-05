@@ -34,6 +34,7 @@ STAGE_ORDER = [
     "load_modal",
     "plan_agent",
     "implement_agent",
+    "initial_train",
     "tune_agent",
     "report_agent",
 ]
@@ -43,6 +44,7 @@ STAGE_LABELS: Dict[str, str] = {
     "load_modal": "Load to Modal Volume",
     "plan_agent": "PlanAgent",
     "implement_agent": "ImplementationAgent",
+    "initial_train": "InitialTrainAgent",
     "tune_agent": "TuningAgent",
     "report_agent": "ReportAgent",
 }
@@ -122,6 +124,7 @@ def create_run(
                 "label": "ImplementationAgent",
                 "status": "pending",
             },
+            {"id": "initial_train", "label": "InitialTrainAgent", "status": "pending"},
             {"id": "tune_agent", "label": "TuningAgent", "status": "pending"},
             {"id": "report_agent", "label": "ReportAgent", "status": "pending"},
         ],
@@ -129,7 +132,8 @@ def create_run(
             {"from": "prepare_dataset", "to": "load_modal", "active": False},
             {"from": "load_modal", "to": "plan_agent", "active": False},
             {"from": "plan_agent", "to": "implement_agent", "active": False},
-            {"from": "implement_agent", "to": "tune_agent", "active": False},
+            {"from": "implement_agent", "to": "initial_train", "active": False},
+            {"from": "initial_train", "to": "tune_agent", "active": False},
             {"from": "tune_agent", "to": "report_agent", "active": False},
         ],
     }

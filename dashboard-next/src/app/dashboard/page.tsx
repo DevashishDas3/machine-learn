@@ -60,6 +60,12 @@ interface SwarmRun {
   } | null;
 }
 
+interface NewRunStartPayload {
+  swarmRunId: string;
+  runName?: string;
+  taskDescription: string;
+}
+
 interface ChatMessage {
   id: string;
   role: "system" | "agent" | "user";
@@ -147,6 +153,7 @@ function PhaseBadge({ phase }: { phase: string }) {
     load_modal: { label: "UPLOADING", borderColor: "border-violet-500/50", textColor: "text-violet-400" },
     plan_agent: { label: "PLANNING", borderColor: "border-amber-500/50", textColor: "text-amber-400" },
     implement_agent: { label: "IMPLEMENTING", borderColor: "border-orange-500/50", textColor: "text-orange-400" },
+    initial_train: { label: "INITIAL TRAIN", borderColor: "border-lime-500/50", textColor: "text-lime-400" },
     tune_agent: { label: "TUNING", borderColor: "border-teal-500/50", textColor: "text-teal-400" },
     report_agent: { label: "REPORTING", borderColor: "border-cyan-500/50", textColor: "text-cyan-400" },
     complete: { label: "COMPLETE", borderColor: "border-green-500/50", textColor: "text-green-400" },
@@ -309,6 +316,7 @@ const STAGE_ORDER = [
   "load_modal",
   "plan_agent",
   "implement_agent",
+  "initial_train",
   "tune_agent",
   "report_agent",
 ];
@@ -317,7 +325,8 @@ const STAGE_LABELS: Record<string, string> = {
   prepare_dataset: "Prepare Dataset",
   load_modal: "Load to Modal Volume",
   plan_agent: "Planning",
-  implement_agent: "Code Generation + Initial Training",
+  implement_agent: "Code Generation",
+  initial_train: "Initial Training",
   tune_agent: "Hyperparameter Tuning",
   report_agent: "Report",
 };
@@ -470,6 +479,53 @@ function mergeRunLists(existing: SwarmRun[], incoming: SwarmRun[]): SwarmRun[] {
   return merged.sort(
     (a, b) => parseIsoTimestamp(b.created_at) - parseIsoTimestamp(a.created_at),
   );
+}
+
+function createOptimisticRun(payload: NewRunStartPayload, userId: string): SwarmRun {
+  const now = new Date().toISOString();
+  return {
+    id: payload.swarmRunId,
+    user_id: userId,
+    created_at: now,
+    updated_at: now,
+    name: payload.runName?.trim() || `Run ${now}`,
+    status: "running",
+    current_phase: "prepare_dataset",
+    flowchart_data: {
+      stages: [
+        { id: "prepare_dataset", label: "Prepare Dataset", status: "active", startedAt: now },
+        { id: "load_modal", label: "Load to Modal Volume", status: "pending" },
+        { id: "plan_agent", label: "Planning", status: "pending" },
+        { id: "implement_agent", label: "Code Generation", status: "pending" },
+        { id: "initial_train", label: "Initial Training", status: "pending" },
+        { id: "tune_agent", label: "Hyperparameter Tuning", status: "pending" },
+        { id: "report_agent", label: "Report", status: "pending" },
+      ],
+      connections: [
+        { from: "prepare_dataset", to: "load_modal", active: false },
+        { from: "load_modal", to: "plan_agent", active: false },
+        { from: "plan_agent", to: "implement_agent", active: false },
+        { from: "implement_agent", to: "initial_train", active: false },
+        { from: "initial_train", to: "tune_agent", active: false },
+        { from: "tune_agent", to: "report_agent", active: false },
+      ],
+    },
+    final_report: null,
+    chat_messages: [
+      {
+        id: `local-${payload.swarmRunId}`,
+        role: "system",
+        content: "Run created. Waiting for live updates...",
+        timestamp: now,
+        stage: "prepare_dataset",
+      },
+    ],
+    run_data: {
+      task_description: payload.taskDescription,
+      submitted_from: "dashboard-next",
+      optimistic: true,
+    },
+  };
 }
 
 function formatDurationSeconds(startedAt?: string, completedAt?: string): string | null {
@@ -645,7 +701,9 @@ function inferParallelTotal(
   runData: SwarmRun["run_data"],
   stageMessages: ChatMessage[],
 ): number {
-  if (stageId !== "implement_agent" && stageId !== "tune_agent") return 1;
+  if (stageId !== "implement_agent" && stageId !== "initial_train" && stageId !== "tune_agent") {
+    return 1;
+  }
 
   const configured =
     typeof runData?.max_approaches === "number" && Number.isFinite(runData.max_approaches)
@@ -836,9 +894,13 @@ function FlowTree({
               totalParallel,
             );
             const showParallel =
-              (stage.id === "implement_agent" || stage.id === "tune_agent") && totalParallel > 1;
+              (stage.id === "implement_agent" || stage.id === "initial_train" || stage.id === "tune_agent") && totalParallel > 1;
             const visibleWorkers = Math.min(totalParallel, 8);
             const hiddenWorkers = Math.max(0, totalParallel - visibleWorkers);
+            const initialTrainSuccess =
+              stage.id === "initial_train" && typeof metrics.successful_runs === "number"
+                ? Math.max(0, Math.floor(metrics.successful_runs))
+                : null;
 
             const statusDotClass =
               status === "complete"
@@ -942,6 +1004,14 @@ function FlowTree({
                             +{hiddenWorkers} more workers
                           </p>
                         )}
+                      </div>
+                    </div>
+                  )}
+
+                  {stage.id === "initial_train" && initialTrainSuccess !== null && (
+                    <div className="px-4 pb-3">
+                      <div className="border border-lime-500/30 bg-lime-500/10 px-3 py-2 font-mono text-[10px] text-lime-300">
+                        First-pass success metric: {initialTrainSuccess}/{totalParallel} approaches completed
                       </div>
                     </div>
                   )}
@@ -1327,6 +1397,41 @@ export default function DashboardPage() {
   const [userId, setUserId] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
 
+  const hydrateRunById = useCallback(
+    async (runId: string) => {
+      if (!userId) return;
+      const { data, error } = await supabase
+        .from("swarm_runs")
+        .select("*")
+        .eq("id", runId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error || !data) return;
+      const fetched = data as SwarmRun;
+      setRuns((prev) => upsertRun(prev, fetched));
+      setCurrentRun((prev) => pickPreferredRun(prev, fetched));
+      setLastUpdated(new Date());
+    },
+    [supabase, userId],
+  );
+
+  const handleRunStarted = useCallback(
+    (payload: NewRunStartPayload) => {
+      if (!userId) {
+        setSelectedRunId(payload.swarmRunId);
+        return;
+      }
+
+      const optimistic = createOptimisticRun(payload, userId);
+      setRuns((prev) => upsertRun(prev, optimistic));
+      setCurrentRun((prev) => pickPreferredRun(prev, optimistic));
+      setSelectedRunId(payload.swarmRunId);
+      setLastUpdated(new Date());
+      void hydrateRunById(payload.swarmRunId);
+    },
+    [hydrateRunById, userId],
+  );
+
   // Get current user
   useEffect(() => {
     const getUser = async () => {
@@ -1422,6 +1527,7 @@ export default function DashboardPage() {
     if (!userId || !selectedRunId) return;
 
     const shouldPoll =
+      !currentRun ||
       currentRun?.status === "running" ||
       (currentRun?.status === "complete" && !currentRun?.final_report?.report);
     if (!shouldPoll) return;
@@ -1456,7 +1562,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (selectedRunId) {
       const run = runs.find((r) => r.id === selectedRunId);
-      setCurrentRun((prev) => pickPreferredRun(prev, run || null));
+      setCurrentRun(run ?? null);
     } else {
       setCurrentRun(null);
     }
@@ -1481,7 +1587,7 @@ export default function DashboardPage() {
           </span>
         </div>
 
-        <NewRunForm onStarted={(newRunId) => setSelectedRunId(newRunId)} />
+        <NewRunForm onStarted={handleRunStarted} />
 
         {/* Runs List */}
         <div className="flex-1 overflow-y-auto py-2">
@@ -1639,7 +1745,7 @@ export default function DashboardPage() {
 function NewRunForm({
   onStarted,
 }: {
-  onStarted: (swarmRunId: string) => void;
+  onStarted: (payload: NewRunStartPayload) => void;
 }) {
   const [runName, setRunName] = useState("");
   const [taskDescription, setTaskDescription] = useState("");
@@ -1688,7 +1794,11 @@ function NewRunForm({
           throw new Error(`${payload.error || "Failed to start run."}${detailText}`);
         }
 
-        onStarted(payload.swarmRunId);
+        onStarted({
+          swarmRunId: payload.swarmRunId,
+          runName: runName.trim(),
+          taskDescription: taskDescription.trim(),
+        });
         setRunName("");
         setTaskDescription("");
         setDatasetFile(null);

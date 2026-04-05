@@ -337,7 +337,7 @@ async def _run_pipeline(
         raise ValueError("Estimated run cost exceeds configured budget")
 
     # --- Phase 2a: Generate all code in parallel (no GPU slot needed) ---
-    # ImplementationAgent phase (codegen + training)
+    # ImplementationAgent phase (code generation)
     dash_stage("implement_agent", "active")
     dash_msg(
         "agent", "Starting code generation for all approaches...", "implement_agent"
@@ -394,9 +394,15 @@ async def _run_pipeline(
         f"Code generation complete for {len(gen_pairs)} approaches",
         "implement_agent",
     )
+    dash_stage(
+        "implement_agent",
+        "complete",
+        code_artifacts=implement_code_artifacts,
+    )
 
-    # --- Phase 2b: Run all training in parallel (semaphore limits GPU containers) ---
-    dash_msg("agent", "Starting training on A100 cluster...", "implement_agent")
+    # --- Phase 2b: Run first-pass training in parallel (semaphore limits GPU containers) ---
+    dash_stage("initial_train", "active")
+    dash_msg("agent", "Starting initial training on A100 cluster...", "initial_train")
     semaphore = asyncio.Semaphore(run_cfg.max_parallel_agents)
 
     async def _run_approach(
@@ -491,9 +497,9 @@ async def _run_pipeline(
             )
 
     logger.info(
-        "running_implementation_phase", extra={"extra_fields": {"run_id": run_id}}
+        "running_initial_train_phase", extra={"extra_fields": {"run_id": run_id}}
     )
-    ev.emit("implementation_phase_started", num_approaches=len(approaches))
+    ev.emit("initial_train_phase_started", num_approaches=len(approaches))
     initial_results = await asyncio.gather(
         *[_run_approach(a) for a in approaches], return_exceptions=True
     )
@@ -512,10 +518,10 @@ async def _run_pipeline(
     dash_msg(
         "agent",
         f"Initial training complete: {n_ok}/{len(approaches)} successful",
-        "implement_agent",
+        "initial_train",
     )
     dash_stage(
-        "implement_agent",
+        "initial_train",
         "complete",
         metrics={"successful_runs": n_ok},
         code_artifacts=implement_code_artifacts,

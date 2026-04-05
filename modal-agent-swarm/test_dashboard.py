@@ -35,7 +35,7 @@ def simulate_pipeline(user_id: str):
     print()
     
     # Create a new run
-    print("[1/7] Creating new run...")
+    print("[1/8] Creating new run...")
     run_id = create_run(
         user_id=user_id,
         name="MNIST Classification Test",
@@ -45,7 +45,7 @@ def simulate_pipeline(user_id: str):
     time.sleep(2)
     
     # Stage 1: Prepare Dataset
-    print("[2/7] Preparing dataset...")
+    print("[2/8] Preparing dataset...")
     update_flowchart_stage(run_id, "prepare_dataset", "active")
     add_chat_message(run_id, "agent", "Loading MNIST dataset (60,000 training images)...", "prepare_dataset")
     time.sleep(2)
@@ -54,7 +54,7 @@ def simulate_pipeline(user_id: str):
     time.sleep(1)
     
     # Stage 2: Load to Modal
-    print("[3/7] Uploading to Modal volume...")
+    print("[3/8] Uploading to Modal volume...")
     update_flowchart_stage(run_id, "load_modal", "active")
     add_chat_message(run_id, "agent", "Uploading dataset to Modal volume...", "load_modal")
     time.sleep(2)
@@ -63,7 +63,7 @@ def simulate_pipeline(user_id: str):
     time.sleep(1)
     
     # Stage 3: Plan Agent
-    print("[4/7] Running PlanAgent...")
+    print("[4/8] Running PlanAgent...")
     update_flowchart_stage(run_id, "plan_agent", "active")
     add_chat_message(run_id, "agent", "Analyzing task requirements...", "plan_agent")
     time.sleep(2)
@@ -73,21 +73,28 @@ def simulate_pipeline(user_id: str):
     time.sleep(1)
     
     # Stage 4: Implementation Agent
-    print("[5/7] Running ImplementationAgent on A100...")
+    print("[5/8] Running ImplementationAgent (code generation)...")
     update_flowchart_stage(run_id, "implement_agent", "active")
     add_chat_message(run_id, "agent", "Generating training code for CNN approach...", "implement_agent")
     time.sleep(2)
-    add_chat_message(run_id, "agent", "Training CNN on A100 GPU...", "implement_agent")
+    add_chat_message(run_id, "agent", "Generated training scripts for CNN, ResNet-18, and MLP", "implement_agent")
+    update_flowchart_stage(run_id, "implement_agent", "complete")
+    time.sleep(1)
+
+    # Stage 5: Initial Train
+    print("[6/8] Running InitialTrainAgent...")
+    update_flowchart_stage(run_id, "initial_train", "active")
+    add_chat_message(run_id, "agent", "Training CNN on A100 GPU...", "initial_train")
     time.sleep(3)
-    add_chat_message(run_id, "agent", "CNN training complete: accuracy=0.9823", "implement_agent")
-    add_chat_message(run_id, "agent", "Training ResNet-18...", "implement_agent")
+    add_chat_message(run_id, "agent", "CNN training complete: accuracy=0.9823", "initial_train")
+    add_chat_message(run_id, "agent", "Training ResNet-18...", "initial_train")
     time.sleep(2)
-    add_chat_message(run_id, "agent", "ResNet-18 complete: accuracy=0.9912", "implement_agent")
-    update_flowchart_stage(run_id, "implement_agent", "complete", metrics={"successful_runs": 3})
+    add_chat_message(run_id, "agent", "ResNet-18 complete: accuracy=0.9912", "initial_train")
+    update_flowchart_stage(run_id, "initial_train", "complete", metrics={"successful_runs": 3})
     time.sleep(1)
     
     # Stage 5: Tuning Agent
-    print("[6/7] Running TuningAgent...")
+    print("[7/8] Running TuningAgent...")
     update_flowchart_stage(run_id, "tune_agent", "active")
     add_chat_message(run_id, "agent", "Starting hyperparameter optimization...", "tune_agent")
     time.sleep(2)
@@ -100,7 +107,7 @@ def simulate_pipeline(user_id: str):
     time.sleep(1)
     
     # Stage 6: Report Agent
-    print("[7/7] Generating final report...")
+    print("[8/8] Generating final report...")
     update_flowchart_stage(run_id, "report_agent", "active")
     add_chat_message(run_id, "agent", "Compiling results and generating report...", "report_agent")
     time.sleep(2)
