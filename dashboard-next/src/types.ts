@@ -5,6 +5,7 @@ export type EventName =
   | "codegen_phase_started"
   | "code_generation_started"
   | "code_generated"
+  | "code_finalized"
   | "implementation_phase_started"
   | "training_started"
   | "train_result"

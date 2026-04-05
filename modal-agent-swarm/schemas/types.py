@@ -57,6 +57,35 @@ class TuningIteration(BaseModel):
     result: TrainingResult
 
 
+class TuningHistoryRecord(BaseModel):
+    ts_utc: str = Field(default_factory=lambda: datetime.now(tz=UTC).isoformat())
+    run_id: str
+    approach_name: str
+    iteration: int
+    primary_metric: str
+    maximize_metric: bool
+    primary_metric_value: Optional[float] = None
+    hyperparameters: Dict[str, Any] = Field(default_factory=dict)
+    metrics: Dict[str, float] = Field(default_factory=dict)
+    error: Optional[str] = None
+
+    @field_validator("primary_metric")
+    @classmethod
+    def normalize_primary_metric(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("metrics", mode="before")
+    @classmethod
+    def normalize_metric_values(cls, value: Dict[str, Any]) -> Dict[str, float]:
+        normalized: Dict[str, float] = {}
+        for k, v in (value or {}).items():
+            try:
+                normalized[str(k).strip().lower()] = float(v)
+            except (TypeError, ValueError):
+                continue
+        return normalized
+
+
 class CostEstimate(BaseModel):
     estimated_gpu_hours: float
     estimated_cost_usd: float
@@ -96,7 +125,9 @@ class ApproachRun(BaseModel):
 
 class RunSummary(BaseModel):
     run_id: str
-    created_at_utc: str = Field(default_factory=lambda: datetime.now(tz=UTC).isoformat())
+    created_at_utc: str = Field(
+        default_factory=lambda: datetime.now(tz=UTC).isoformat()
+    )
     config: RunConfig
     cost_estimate: CostEstimate
     approaches: List[Approach]

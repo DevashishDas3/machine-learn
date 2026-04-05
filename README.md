@@ -103,6 +103,12 @@ uv run python dashboard_launcher_service.py
 # or: python dashboard_launcher_service.py
 ```
 
+Orchestrator always uses deployed LLM service via `modal.Cls.from_name(...)`.
+
+- `LLM_SERVICE_APP_NAME` (default `ml-agent-llm-service`): deployed LLM app name.
+- `LLM_SERVICE_CLASS_NAME` (default `LLMServer`): deployed class name inside the LLM service app.
+- `MODAL_ENVIRONMENT` (default `main`): environment used when resolving the deployed class.
+
 ## Start a run from dashboard
 
 1. Open `http://localhost:3000/signup` (or `/login`).
@@ -145,8 +151,6 @@ modal run orchestrator.py --dataset-path /vol/datasets/sample.csv --labels-path 
 - Launcher behavior:
   - dashboard launcher now uses Modal Python SDK (`modal.Volume.batch_upload`, `modal.Function.from_name(...).spawn(...)`) and does not shell out to `modal` CLI.
 - LLM routing:
-  - `LLM_USE_DEPLOYED_SERVICE` (default `true`)
-  - `LLM_ALLOW_LOCAL_FALLBACK` (default `false`)
   - `LLM_SERVICE_APP_NAME` (default `ml-agent-llm-service`)
   - `LLM_SERVICE_CLASS_NAME` (default `LLMServer`)
 - Supabase (for backend writes):
@@ -176,6 +180,6 @@ pytest -q
   - Check response JSON `details` and verify `dashboard_launcher_service.py` is running.
   - Verify `DASHBOARD_LAUNCHER_URL` matches launcher host/port.
 - LLM service mismatch / unexpected local fallback:
-  - Ensure `llm_service.py` is deployed and `LLM_ALLOW_LOCAL_FALLBACK=false`.
+  - Ensure `llm_service.py` is deployed to the same `MODAL_ENVIRONMENT` used by orchestrator.
 - No realtime updates:
   - Confirm Supabase realtime publication is enabled for `swarm_runs` (migration includes this).

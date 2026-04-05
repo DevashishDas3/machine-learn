@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from agents import (
@@ -22,16 +24,15 @@ from schemas import (
     RunConfig,
     RunSummary,
     TrainingResult,
+    TuningHistoryRecord,
     TuningIteration,
 )
-from supabase_helpers import (
-    update_flowchart_stage,
-    add_chat_message,
-    complete_run,
-    fail_run,
-)
 from utils.logging_utils import configure_logging, get_logger, make_run_id
-from utils.run_events import RunEventLogger
+from utils.run_events import (
+    RunEventLogger,
+    append_tuning_history_record,
+    load_tuning_history,
+)
 from utils.volume_utils import ensure_run_dirs, write_json
 
 
@@ -119,6 +120,59 @@ def _build_error_result(approach_name: str, error: str) -> TrainingResult:
     )
 
 
+def _render_code_with_best_hyperparameters(
+    base_code: str, best_hyperparameters: Dict[str, Any]
+) -> str:
+    rendered = base_code
+    # Replace hyper.get("k", default) with tuned literals for clearer finalized code view.
+    for key, value in best_hyperparameters.items():
+        literal = repr(value)
+        pattern = rf"hyper\.get\(\s*['\"]{re.escape(key)}['\"]\s*,\s*[^\)]*\)"
+        rendered = re.sub(pattern, literal, rendered)
+
+    header = (
+        "# Finalized run view\n"
+        "# Best hyperparameters selected by tuning for this approach:\n"
+        f"# {json.dumps(best_hyperparameters, sort_keys=True)}\n"
+        "# Note: training code reads payload['hyperparameters'] at runtime.\n\n"
+    )
+    return header + rendered
+
+
+@app.function(
+    image=base_image,
+    volumes={"/vol": data_volume},
+    timeout=30,
+    retries=0,
+    max_containers=1,
+)
+def validate_dataset_inputs(
+    dataset_path: str, labels_path: str | None = None
+) -> Dict[str, Any]:
+    data_volume.reload()
+
+    dataset = Path(dataset_path)
+    dataset_exists = dataset.exists()
+
+    labels_exists = True
+    if labels_path:
+        labels_exists = Path(labels_path).exists()
+
+    nearby_files: List[str] = []
+    parent = dataset.parent
+    if parent.exists() and parent.is_dir():
+        nearby_files = sorted(p.name for p in parent.iterdir())[:25]
+
+    return {
+        "dataset_path": dataset_path,
+        "dataset_exists": dataset_exists,
+        "labels_path": labels_path,
+        "labels_exists": labels_exists,
+        "dataset_parent": str(parent),
+        "nearby_files": nearby_files,
+    }
+
+
 @app.function(
     image=base_image,
     volumes={"/vol": data_volume},
@@ -180,34 +234,56 @@ async def _run_pipeline(
         local_events_dir=str(ev.dir),
     )
 
-    # Helper to update dashboard (no-op if swarm_run_id not provided)
-    def dash_stage(stage: str, status: str, details: str = None, metrics: dict = None):
-        if swarm_run_id:
-            try:
-                update_flowchart_stage(swarm_run_id, stage, status, details, metrics)
-            except Exception as e:
-                logger.warning(f"Dashboard update failed: {e}")
+    def dash_stage(
+        stage_id: str,
+        status: str,
+        details: str | None = None,
+        metrics: Dict[str, float] | None = None,
+    ) -> None:
+        if not swarm_run_id:
+            return
+        try:
+            from supabase_helpers import update_flowchart_stage
 
-    def dash_msg(role: str, content: str, stage: str = None):
-        if swarm_run_id:
-            try:
-                add_chat_message(swarm_run_id, role, content, stage)
-            except Exception as e:
-                logger.warning(f"Dashboard message failed: {e}")
+            update_flowchart_stage(
+                swarm_run_id,
+                stage_id,
+                status,
+                details=details,
+                metrics=metrics,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "supabase_stage_update_failed",
+                extra={
+                    "extra_fields": {
+                        "swarm_run_id": swarm_run_id,
+                        "stage_id": stage_id,
+                        "status": status,
+                        "error": str(exc),
+                    }
+                },
+            )
 
-    # Start: Prepare Dataset
-    dash_stage("prepare_dataset", "active")
-    dash_msg(
-        "system",
-        f"Pipeline started: {run_cfg.task_description[:200]}...",
-        "prepare_dataset",
-    )
-    dash_msg("agent", f"Dataset path: {run_cfg.dataset_path}", "prepare_dataset")
-    dash_stage("prepare_dataset", "complete")
+    def dash_msg(role: str, content: str, stage: str | None = None) -> None:
+        if not swarm_run_id:
+            return
+        try:
+            from supabase_helpers import add_chat_message
 
-    # Load to Modal
-    dash_stage("load_modal", "active")
-    dash_msg("agent", "Loading data to Modal volume...", "load_modal")
+            add_chat_message(swarm_run_id, role, content, stage=stage)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "supabase_chat_update_failed",
+                extra={
+                    "extra_fields": {
+                        "swarm_run_id": swarm_run_id,
+                        "stage": stage,
+                        "role": role,
+                        "error": str(exc),
+                    }
+                },
+            )
 
     llm = get_llm_server_handle()
     dash_stage("load_modal", "complete")
@@ -222,7 +298,10 @@ async def _run_pipeline(
     dash_msg("agent", "Analyzing task and generating approach plan...", "plan_agent")
 
     logger.info("running_plan_phase", extra={"extra_fields": {"run_id": run_id}})
-    approaches = await plan_agent.run(run_cfg)
+    approaches, plan_research_digest = await plan_agent.run(
+        run_cfg,
+        emit_hook=lambda event, payload: ev.emit(event, **payload),
+    )
     cost_estimate = CostEstimate.model_validate(
         plan_agent.estimate_cost(run_cfg, len(approaches))
     )
@@ -230,6 +309,7 @@ async def _run_pipeline(
         "plan_complete",
         approaches=[a.model_dump() for a in approaches],
         cost_estimate=cost_estimate.model_dump(),
+        plan_research_digest=plan_research_digest,
     )
 
     approach_names = [a.name for a in approaches]
@@ -252,6 +332,8 @@ async def _run_pipeline(
             "plan_agent",
         )
         if swarm_run_id:
+            from supabase_helpers import fail_run
+
             fail_run(swarm_run_id, f"Budget exceeded", "plan_agent")
         raise ValueError(
             f"Estimated run cost ${cost_estimate.estimated_cost_usd:.2f} exceeds budget ${run_cfg.run_budget_usd:.2f}"
@@ -336,9 +418,9 @@ async def _run_pipeline(
                         iteration=iteration,
                         fix_attempt=fix_i + 1,
                         max_attempts=max_fix,
-                        previous_error=_snip(last_result.error or "")
-                        if last_result
-                        else "",
+                        previous_error=(
+                            _snip(last_result.error or "") if last_result else ""
+                        ),
                     )
 
                 try:
@@ -359,6 +441,7 @@ async def _run_pipeline(
                     "train_result",
                     approach=approach.name,
                     phase=phase,
+                    iteration=iteration,
                     hyperparameters=hp_override,
                     metrics=last_result.metrics,
                     error=(last_result.error[:3000] if last_result.error else None),
@@ -433,60 +516,164 @@ async def _run_pipeline(
 
     async def tune_single(
         approach: Approach, current: TrainingResult
-    ) -> Tuple[List[TuningIteration], TrainingResult]:
+    ) -> Tuple[List[TuningIteration], TrainingResult, Dict[str, Any]]:
         iterations: List[TuningIteration] = []
-        all_results = [current]
+        candidate_results: List[Tuple[TrainingResult, Dict[str, Any]]] = [
+            (current, dict(approach.hyperparameters))
+        ]
         latest = current
+        cross_run_history = load_tuning_history(approach.name, limit=80)
+        in_run_history: List[TuningHistoryRecord] = [
+            TuningHistoryRecord(
+                run_id=run_id,
+                approach_name=approach.name,
+                iteration=0,
+                primary_metric=run_cfg.primary_metric,
+                maximize_metric=run_cfg.maximize_metric,
+                primary_metric_value=current.metrics.get(run_cfg.primary_metric),
+                hyperparameters=dict(approach.hyperparameters),
+                metrics=current.metrics,
+                error=current.error,
+            )
+        ]
+        print(
+            f"[TUNING][{approach.name}] loaded cross-run history records="
+            f"{len(cross_run_history)}"
+        )
+        if not cross_run_history:
+            print(
+                f"[TUNING][{approach.name}] 0 prior cross-run records; exploring from baseline"
+            )
+
         for iteration in range(1, run_cfg.max_tuning_iterations + 1):
+            attempted_hp = dict(approach.hyperparameters)
+            prev_primary = latest.metrics.get(run_cfg.primary_metric)
+            has_in_run_history = len(in_run_history) > 0
+            has_cross_run_history = len(cross_run_history) > 0
+            history_source = (
+                "both"
+                if has_in_run_history and has_cross_run_history
+                else (
+                    "in-run"
+                    if has_in_run_history
+                    else "cross-run" if has_cross_run_history else "none"
+                )
+            )
             try:
-                new_hp = await tuning_agent.suggest_hyperparameters(
+                attempted_hp = await tuning_agent.suggest_hyperparameters(
                     approach=approach,
                     current_result=latest,
                     objective_metric=run_cfg.primary_metric,
+                    in_run_history=in_run_history,
+                    cross_run_history=cross_run_history,
                 )
                 ev.emit(
                     "tuning_suggestion",
                     approach=approach.name,
                     iteration=iteration,
-                    hyperparameters=new_hp,
+                    hyperparameters=attempted_hp,
                 )
                 tuned_result = await _run_approach(
-                    approach, hp_override=new_hp, iteration=iteration
-                )
-                latest = tuned_result
-                all_results.append(tuned_result)
-                iterations.append(
-                    TuningIteration(
-                        iteration=iteration,
-                        hyperparameters=new_hp,
-                        result=tuned_result,
-                    )
+                    approach, hp_override=attempted_hp, iteration=iteration
                 )
             except Exception as exc:  # noqa: BLE001
                 err = _build_error_result(approach.name, str(exc))
-                latest = err
-                all_results.append(err)
-                iterations.append(
-                    TuningIteration(
-                        iteration=iteration,
-                        hyperparameters=dict(approach.hyperparameters),
-                        result=err,
+                tuned_result = err
+
+            latest = tuned_result
+            candidate_results.append((tuned_result, attempted_hp))
+            iterations.append(
+                TuningIteration(
+                    iteration=iteration,
+                    hyperparameters=attempted_hp,
+                    result=tuned_result,
+                )
+            )
+
+            history_record = TuningHistoryRecord(
+                run_id=run_id,
+                approach_name=approach.name,
+                iteration=iteration,
+                primary_metric=run_cfg.primary_metric,
+                maximize_metric=run_cfg.maximize_metric,
+                primary_metric_value=tuned_result.metrics.get(run_cfg.primary_metric),
+                hyperparameters=attempted_hp,
+                metrics=tuned_result.metrics,
+                error=tuned_result.error,
+            )
+            in_run_history.append(history_record)
+            append_tuning_history_record(history_record)
+
+            new_primary = tuned_result.metrics.get(run_cfg.primary_metric)
+            delta_text = "n/a"
+            if prev_primary is not None and new_primary is not None:
+                delta_text = f"{(new_primary - prev_primary):+.6f}"
+            status = (
+                "error"
+                if tuned_result.error
+                else (
+                    "improved"
+                    if (
+                        prev_primary is not None
+                        and new_primary is not None
+                        and (
+                            (new_primary > prev_primary and run_cfg.maximize_metric)
+                            or (
+                                new_primary < prev_primary
+                                and not run_cfg.maximize_metric
+                            )
+                        )
+                    )
+                    else (
+                        "worse_or_equal"
+                        if prev_primary is not None and new_primary is not None
+                        else "no_metric"
                     )
                 )
+            )
+            print(
+                f"[TUNING][{approach.name}] iter={iteration} history_source={history_source} "
+                f"in_run={len(in_run_history)-1} cross_run={len(cross_run_history)} "
+                f"prev_{run_cfg.primary_metric}={prev_primary} "
+                f"new_{run_cfg.primary_metric}={new_primary} delta={delta_text} status={status}"
+            )
+            if tuned_result.error:
+                print(
+                    f"[TUNING][{approach.name}] iter={iteration} error={_snip(tuned_result.error)}"
+                )
 
+        all_results = [result for result, _ in candidate_results]
         best = _pick_best_result(
             all_results, run_cfg.primary_metric, run_cfg.maximize_metric
         )
-        return iterations, best
+        best_hyperparameters = dict(approach.hyperparameters)
+        for result, hp in candidate_results:
+            if result is best:
+                best_hyperparameters = hp
+                break
+
+        base_code = generated_code_by_name.get(approach.name, FALLBACK_TRAIN_CODE)
+        final_code = _render_code_with_best_hyperparameters(
+            base_code, best_hyperparameters
+        )
+        ev.emit(
+            "code_finalized",
+            approach=approach.name,
+            framework=approach.framework,
+            code_preview=final_code[:20_000],
+        )
+        return iterations, best, best_hyperparameters
 
     tuning_tasks = [tune_single(a, initial_results_by_name[a.name]) for a in approaches]
     tuning_outputs = await asyncio.gather(*tuning_tasks, return_exceptions=True)
 
     approach_runs: List[ApproachRun] = []
+    best_hyperparameters_by_name: Dict[str, Dict[str, Any]] = {}
     for approach, tuned in zip(approaches, tuning_outputs):
         initial_result = initial_results_by_name[approach.name]
         if isinstance(tuned, Exception):
             fallback_best = initial_result
+            best_hyperparameters_by_name[approach.name] = dict(approach.hyperparameters)
             approach_runs.append(
                 ApproachRun(
                     approach=approach,
@@ -497,7 +684,8 @@ async def _run_pipeline(
             )
             continue
 
-        iterations, best = tuned
+        iterations, best, best_hyperparameters = tuned
+        best_hyperparameters_by_name[approach.name] = best_hyperparameters
         approach_runs.append(
             ApproachRun(
                 approach=approach,
@@ -580,20 +768,24 @@ async def _run_pipeline(
     # Update Supabase dashboard with final results
     if swarm_run_id:
         try:
+            from supabase_helpers import complete_run
+
             best_metric = best_overall.metrics.get(run_cfg.primary_metric)
             loss_metric = best_overall.metrics.get("loss") or best_overall.metrics.get(
                 "train_loss"
             )
             complete_run(
                 swarm_run_id,
-                accuracy=best_metric
-                if run_cfg.primary_metric in ("accuracy", "val_accuracy")
-                else None,
+                accuracy=(
+                    best_metric
+                    if run_cfg.primary_metric in ("accuracy", "val_accuracy")
+                    else None
+                ),
                 loss=loss_metric,
                 total_time_gpu=None,  # Could track if needed
-                best_hyperparameters=dict(best_overall.metrics)
-                if best_overall.metrics
-                else None,
+                best_hyperparameters=(
+                    dict(best_overall.metrics) if best_overall.metrics else None
+                ),
                 recommendation=recommendation,
                 report=report_md,
             )

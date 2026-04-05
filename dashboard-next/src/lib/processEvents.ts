@@ -68,6 +68,14 @@ export function processEvents(events: RawEvent[]): PipelineState | null {
         break;
       }
 
+      case "code_finalized": {
+        const a = approachMap.get(ev.approach);
+        if (a) {
+          a.code = ev.code_preview ?? a.code ?? "";
+        }
+        break;
+      }
+
       case "implementation_phase_started":
         state.phase = "training";
         state.trainingStartedAt = ev.ts;
