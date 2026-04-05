@@ -156,10 +156,12 @@ def write_final_artifacts(
     }
 
 
-async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) -> RunSummary:
+async def _run_pipeline(
+    run_cfg: RunConfig, swarm_run_id: Optional[str] = None
+) -> RunSummary:
     """
     Main pipeline orchestrator.
-    
+
     Args:
         run_cfg: Pipeline configuration
         swarm_run_id: Optional Supabase swarm_runs.id for dashboard updates
@@ -177,7 +179,7 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
         dashboard_hint="streamlit run dashboard.py",
         local_events_dir=str(ev.dir),
     )
-    
+
     # Helper to update dashboard (no-op if swarm_run_id not provided)
     def dash_stage(stage: str, status: str, details: str = None, metrics: dict = None):
         if swarm_run_id:
@@ -185,24 +187,28 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
                 update_flowchart_stage(swarm_run_id, stage, status, details, metrics)
             except Exception as e:
                 logger.warning(f"Dashboard update failed: {e}")
-    
+
     def dash_msg(role: str, content: str, stage: str = None):
         if swarm_run_id:
             try:
                 add_chat_message(swarm_run_id, role, content, stage)
             except Exception as e:
                 logger.warning(f"Dashboard message failed: {e}")
-    
+
     # Start: Prepare Dataset
     dash_stage("prepare_dataset", "active")
-    dash_msg("system", f"Pipeline started: {run_cfg.task_description[:200]}...", "prepare_dataset")
+    dash_msg(
+        "system",
+        f"Pipeline started: {run_cfg.task_description[:200]}...",
+        "prepare_dataset",
+    )
     dash_msg("agent", f"Dataset path: {run_cfg.dataset_path}", "prepare_dataset")
     dash_stage("prepare_dataset", "complete")
-    
+
     # Load to Modal
     dash_stage("load_modal", "active")
     dash_msg("agent", "Loading data to Modal volume...", "load_modal")
-    
+
     llm = get_llm_server_handle()
     dash_stage("load_modal", "complete")
     dash_msg("agent", "LLM server ready", "load_modal")
@@ -214,7 +220,7 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
     # PlanAgent phase
     dash_stage("plan_agent", "active")
     dash_msg("agent", "Analyzing task and generating approach plan...", "plan_agent")
-    
+
     logger.info("running_plan_phase", extra={"extra_fields": {"run_id": run_id}})
     approaches = await plan_agent.run(run_cfg)
     cost_estimate = CostEstimate.model_validate(
@@ -225,14 +231,26 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
         approaches=[a.model_dump() for a in approaches],
         cost_estimate=cost_estimate.model_dump(),
     )
-    
+
     approach_names = [a.name for a in approaches]
-    dash_msg("agent", f"Generated {len(approaches)} approaches: {', '.join(approach_names)}", "plan_agent")
-    dash_msg("agent", f"Estimated cost: ${cost_estimate.estimated_cost_usd:.2f}", "plan_agent")
+    dash_msg(
+        "agent",
+        f"Generated {len(approaches)} approaches: {', '.join(approach_names)}",
+        "plan_agent",
+    )
+    dash_msg(
+        "agent",
+        f"Estimated cost: ${cost_estimate.estimated_cost_usd:.2f}",
+        "plan_agent",
+    )
     dash_stage("plan_agent", "complete")
 
     if cost_estimate.estimated_cost_usd > run_cfg.run_budget_usd:
-        dash_msg("system", f"❌ Budget exceeded! ${cost_estimate.estimated_cost_usd:.2f} > ${run_cfg.run_budget_usd:.2f}", "plan_agent")
+        dash_msg(
+            "system",
+            f"❌ Budget exceeded! ${cost_estimate.estimated_cost_usd:.2f} > ${run_cfg.run_budget_usd:.2f}",
+            "plan_agent",
+        )
         if swarm_run_id:
             fail_run(swarm_run_id, f"Budget exceeded", "plan_agent")
         raise ValueError(
@@ -243,8 +261,10 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
     # --- Phase 2a: Generate all code in parallel (no GPU slot needed) ---
     # ImplementationAgent phase (codegen + training)
     dash_stage("implement_agent", "active")
-    dash_msg("agent", "Starting code generation for all approaches...", "implement_agent")
-    
+    dash_msg(
+        "agent", "Starting code generation for all approaches...", "implement_agent"
+    )
+
     logger.info("running_codegen_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("codegen_phase_started", num_approaches=len(approaches))
 
@@ -254,7 +274,11 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
             approach=approach.name,
             framework=approach.framework,
         )
-        dash_msg("agent", f"Generating code for {approach.name} ({approach.framework})...", "implement_agent")
+        dash_msg(
+            "agent",
+            f"Generating code for {approach.name} ({approach.framework})...",
+            "implement_agent",
+        )
         try:
             code = await impl_agent.generate_code(
                 approach=approach,
@@ -274,7 +298,11 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
 
     gen_pairs = await asyncio.gather(*[_gen_code(a) for a in approaches])
     generated_code_by_name: Dict[str, str] = {name: code for name, code in gen_pairs}
-    dash_msg("agent", f"Code generation complete for {len(gen_pairs)} approaches", "implement_agent")
+    dash_msg(
+        "agent",
+        f"Code generation complete for {len(gen_pairs)} approaches",
+        "implement_agent",
+    )
 
     # --- Phase 2b: Run all training in parallel (semaphore limits GPU containers) ---
     dash_msg("agent", "Starting training on A100 cluster...", "implement_agent")
@@ -389,13 +417,17 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
 
     # Report initial training results
     n_ok = sum(1 for r in initial_results_by_name.values() if not r.error)
-    dash_msg("agent", f"Initial training complete: {n_ok}/{len(approaches)} successful", "implement_agent")
+    dash_msg(
+        "agent",
+        f"Initial training complete: {n_ok}/{len(approaches)} successful",
+        "implement_agent",
+    )
     dash_stage("implement_agent", "complete", metrics={"successful_runs": n_ok})
 
     # TuningAgent phase
     dash_stage("tune_agent", "active")
     dash_msg("agent", "Starting hyperparameter tuning...", "tune_agent")
-    
+
     logger.info("running_tuning_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("tuning_phase_started")
 
@@ -477,7 +509,11 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
 
     # Report tuning completion
     total_iterations = sum(len(ar.tuning_iterations) for ar in approach_runs)
-    dash_msg("agent", f"Tuning complete: {total_iterations} total iterations across all approaches", "tune_agent")
+    dash_msg(
+        "agent",
+        f"Tuning complete: {total_iterations} total iterations across all approaches",
+        "tune_agent",
+    )
     dash_stage("tune_agent", "complete")
 
     best_overall = _pick_best_result(
@@ -493,15 +529,19 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
     # ReportAgent phase
     dash_stage("report_agent", "active")
     dash_msg("agent", "Generating final report...", "report_agent")
-    
+
     logger.info("running_report_phase", extra={"extra_fields": {"run_id": run_id}})
     ev.emit("report_phase_started")
     report_md = await report_agent.build_report(
         run_id, run_cfg, approach_runs, recommendation
     )
     ev.emit("report_complete", report_preview=report_md[:30_000])
-    
-    dash_msg("agent", f"Report generated. Recommendation: {best_overall.approach_name}", "report_agent")
+
+    dash_msg(
+        "agent",
+        f"Report generated. Recommendation: {best_overall.approach_name}",
+        "report_agent",
+    )
     dash_stage("report_agent", "complete")
 
     summary = RunSummary(
@@ -536,25 +576,31 @@ async def _run_pipeline(run_cfg: RunConfig, swarm_run_id: Optional[str] = None) 
             "summary_json": json.loads(summary.model_dump_json()),
         }
     )
-    
+
     # Update Supabase dashboard with final results
     if swarm_run_id:
         try:
             best_metric = best_overall.metrics.get(run_cfg.primary_metric)
-            loss_metric = best_overall.metrics.get("loss") or best_overall.metrics.get("train_loss")
+            loss_metric = best_overall.metrics.get("loss") or best_overall.metrics.get(
+                "train_loss"
+            )
             complete_run(
                 swarm_run_id,
-                accuracy=best_metric if run_cfg.primary_metric in ("accuracy", "val_accuracy") else None,
+                accuracy=best_metric
+                if run_cfg.primary_metric in ("accuracy", "val_accuracy")
+                else None,
                 loss=loss_metric,
                 total_time_gpu=None,  # Could track if needed
-                best_hyperparameters=dict(best_overall.metrics) if best_overall.metrics else None,
+                best_hyperparameters=dict(best_overall.metrics)
+                if best_overall.metrics
+                else None,
                 recommendation=recommendation,
                 report=report_md,
             )
             dash_msg("system", "✅ Pipeline completed successfully!", "complete")
         except Exception as e:
             logger.warning(f"Failed to update Supabase completion: {e}")
-    
+
     return summary
 
 
@@ -591,3 +637,20 @@ def main(
     print()
     print(f"Live dashboard (local): streamlit run dashboard.py")
     print(f"Event log for this run: runs_local/{summary.run_id}/events.jsonl")
+
+
+@app.function(
+    image=base_image,
+    volumes={"/vol": data_volume},
+    secrets=[supabase_secret],
+    timeout=24 * 60 * 60,
+    retries=0,
+    max_containers=20,
+)
+def run_pipeline_job(
+    run_cfg_payload: Dict[str, Any], swarm_run_id: str | None = None
+) -> Dict[str, Any]:
+    configure_logging()
+    run_cfg = RunConfig.model_validate(run_cfg_payload)
+    summary = asyncio.run(_run_pipeline(run_cfg, swarm_run_id=swarm_run_id))
+    return json.loads(summary.model_dump_json())

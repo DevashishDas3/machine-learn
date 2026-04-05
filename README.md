@@ -7,7 +7,7 @@ Automated ML approach planning, implementation, tuning, and reporting on Modal G
 ```
 ├── modal-agent-swarm/               # Modal backend (Python)
 │   ├── orchestrator.py              # 4-phase async pipeline (Plan -> Implement -> Tune -> Report)
-│   ├── start_dashboard_run.py       # Dashboard launcher (uploads files + starts Modal run)
+│   ├── dashboard_launcher_service.py # Local FastAPI launcher service for dashboard run starts
 │   ├── llm_service.py               # Deployed shared LLM service app (ml-agent-llm-service)
 │   ├── modal_app.py                 # Modal app/resources and shared images
 │   ├── agents/                      # Plan/impl/tuning/report agents + LLM handle binding
@@ -21,7 +21,7 @@ Automated ML approach planning, implementation, tuning, and reporting on Modal G
 │       ├── login/                   # Email/password auth
 │       ├── signup/                  # Account creation
 │       ├── dashboard/               # Main ML pipeline dashboard + "Start New Run" form
-│       └── api/runs/start/route.ts  # Server route that triggers backend launcher
+│       └── api/runs/start/route.ts  # Server route that forwards to launcher service
 │
 └── supabase/
     └── migrations/20260404_init.sql # swarm_runs schema + RLS + realtime
@@ -85,15 +85,22 @@ Create `dashboard-next/.env.local`:
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
-# Optional overrides for local launcher
-# DASHBOARD_BACKEND_DIR=C:\path\to\machine-learn\modal-agent-swarm
-# PYTHON_BIN=C:\path\to\python.exe
+# Local launcher service
+# DASHBOARD_LAUNCHER_URL=http://127.0.0.1:8001/start-run
 ```
 
 Then run:
 
 ```bash
 npm run dev
+```
+
+Start the local launcher service in another terminal:
+
+```bash
+cd modal-agent-swarm
+uv run python dashboard_launcher_service.py
+# or: python dashboard_launcher_service.py
 ```
 
 ## Start a run from dashboard
@@ -127,8 +134,7 @@ modal run orchestrator.py --dataset-path /vol/datasets/sample.csv --labels-path 
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `DASHBOARD_BACKEND_DIR` (optional)
-- `PYTHON_BIN` (optional)
+- `DASHBOARD_LAUNCHER_URL` (optional, default `http://127.0.0.1:8001/start-run`)
 
 ### Backend (`modal-agent-swarm/.env` + Modal secret)
 
@@ -136,6 +142,8 @@ modal run orchestrator.py --dataset-path /vol/datasets/sample.csv --labels-path 
   - `MODAL_APP_NAME` (default `ml-agent-swarm`)
   - `MODAL_VOLUME_NAME` (default `ml-agent-swarm-data`)
   - `MODAL_ENVIRONMENT` (default `main`)
+- Launcher behavior:
+  - dashboard launcher now uses Modal Python SDK (`modal.Volume.batch_upload`, `modal.Function.from_name(...).spawn(...)`) and does not shell out to `modal` CLI.
 - LLM routing:
   - `LLM_USE_DEPLOYED_SERVICE` (default `true`)
   - `LLM_ALLOW_LOCAL_FALLBACK` (default `false`)
@@ -164,10 +172,9 @@ pytest -q
 
 ## Troubleshooting
 
-- `spawn python ENOENT`:
-  - Set `PYTHON_BIN` in `dashboard-next/.env.local`, or use `uv` with launcher fallback.
 - Dashboard start API returns 500:
-  - Check response JSON `details`, `backendDir`, `launcherPath`, `triedPython`.
+  - Check response JSON `details` and verify `dashboard_launcher_service.py` is running.
+  - Verify `DASHBOARD_LAUNCHER_URL` matches launcher host/port.
 - LLM service mismatch / unexpected local fallback:
   - Ensure `llm_service.py` is deployed and `LLM_ALLOW_LOCAL_FALLBACK=false`.
 - No realtime updates:
