@@ -72,7 +72,7 @@ export default function LandingPage() {
               href="https://github.com/DevashishDas3/machine-learn"
               target="_blank"
               rel="noopener noreferrer"
-              className="group flex items-center gap-2 border border-white/20 px-8 py-3 font-mono text-sm uppercase tracking-widest text-paper transition-all hover:border-paper hover:bg-paper/5"
+              className="group flex items-center gap-2 border border-azure/80 bg-azure/15 px-8 py-3 font-mono text-sm uppercase tracking-widest text-azure shadow-[0_0_16px_rgba(0,128,254,0.22)] transition-all hover:border-azure hover:bg-azure/25 hover:shadow-[0_0_24px_rgba(0,128,254,0.35)]"
             >
               <svg
                 className="h-4 w-4"
