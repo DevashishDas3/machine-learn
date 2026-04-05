@@ -49,6 +49,7 @@ class Settings:
     modal_volume_name: str = os.getenv("MODAL_VOLUME_NAME", "ml-agent-swarm-data")
     modal_environment: str = os.getenv("MODAL_ENVIRONMENT", "main")
     llm_use_deployed_service: bool = _env_bool("LLM_USE_DEPLOYED_SERVICE", True)
+    llm_allow_local_fallback: bool = _env_bool("LLM_ALLOW_LOCAL_FALLBACK", False)
 
     llm_model_primary: str = os.getenv(
         "LLM_MODEL_PRIMARY", "Qwen/Qwen2.5-32B-Instruct-AWQ"

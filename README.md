@@ -150,6 +150,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 ## LLM Service Settings
 
 - `LLM_USE_DEPLOYED_SERVICE` (default `true`): Use deployed LLM service
+- `LLM_ALLOW_LOCAL_FALLBACK` (default `false`): Allow orchestrator to spin up local fallback LLM class if deployed service binding fails
 - `LLM_SERVICE_APP_NAME` (default `ml-agent-llm-service`): Deployed app name
 - `MODAL_ENVIRONMENT` (default `main`): Modal environment
 
