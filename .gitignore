@@ -5,3 +5,5 @@ dashboard-next/node_modules/
 .venv/
 node_modules/
 __pycache__/
+
+.secrets.env
