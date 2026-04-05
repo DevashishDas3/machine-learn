@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,14 +22,9 @@ def _safe_filename(name: str) -> str:
     return cleaned
 
 
-def _build_remote_paths(
-    user_id: str, run_id: str, dataset_name: str, labels_name: str
-) -> tuple[str, str, str]:
+def _build_remote_base_path(user_id: str, run_id: str) -> str:
     timestamp = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
-    base = f"/datasets/{user_id}/{run_id}/{timestamp}"
-    dataset_path = f"{base}/{dataset_name}"
-    labels_path = f"{base}/{labels_name}"
-    return base, dataset_path, labels_path
+    return f"/datasets/{user_id}/{run_id}/{timestamp}"
 
 
 async def _spawn_orchestrator_run(
@@ -42,14 +38,46 @@ async def _spawn_orchestrator_run(
     await deployed_fn.spawn.aio(run_cfg.model_dump(), swarm_run_id)
 
 
-async def _upload_to_volume(local_file: Path, remote_path: str, modal_env: str) -> None:
+def _iter_files(root: Path) -> list[Path]:
+    return sorted([p for p in root.rglob("*") if p.is_file()])
+
+
+def _ensure_within(parent: Path, child: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _extract_zip(local_zip: Path, extract_to: Path) -> None:
+    with zipfile.ZipFile(local_zip, "r") as zf:
+        names = zf.namelist()
+        if not names:
+            raise ValueError("Dataset zip is empty")
+        for name in names:
+            out_path = extract_to / name
+            if not _ensure_within(extract_to, out_path):
+                raise ValueError(f"Unsafe zip entry: {name}")
+        zf.extractall(extract_to)
+
+
+async def _upload_dir_to_volume(
+    local_dir: Path, remote_base: str, modal_env: str
+) -> None:
     volume = modal.Volume.from_name(
         SETTINGS.modal_volume_name,
         environment_name=modal_env,
         create_if_missing=True,
     )
+    files = _iter_files(local_dir)
+    if not files:
+        raise ValueError("Dataset zip is empty")
+
     async with volume.batch_upload(force=True) as batch:
-        batch.put_file(str(local_file), remote_path)
+        for local_file in files:
+            rel = str(local_file.relative_to(local_dir)).replace("\\", "/")
+            batch.put_file(str(local_file), f"{remote_base}/{rel}")
 
 
 class StartRunResponse(BaseModel):
@@ -70,14 +98,12 @@ def create_app() -> FastAPI:
         user_id: str = Form(...),
         task_description: str = Form(...),
         run_name: str = Form(""),
-        dataset: UploadFile = File(...),
-        labels: UploadFile = File(...),
+        dataset_zip: UploadFile = File(...),
     ) -> StartRunResponse:
         if not task_description.strip():
             raise HTTPException(status_code=400, detail="Task prompt is required.")
 
-        dataset_name = _safe_filename(dataset.filename or "dataset.bin")
-        labels_name = _safe_filename(labels.filename or "labels.bin")
+        zip_name = _safe_filename(dataset_zip.filename or "dataset.zip")
         effective_run_name = run_name.strip() or (
             f"Run {datetime.now(tz=UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}"
         )
@@ -88,36 +114,30 @@ def create_app() -> FastAPI:
             initial_message="Run created from dashboard. Preparing dataset upload.",
             run_data={
                 "task_description": task_description,
-                "uploaded_dataset_name": dataset_name,
-                "uploaded_labels_name": labels_name,
+                "uploaded_dataset_zip_name": zip_name,
                 "submitted_from": "dashboard-next",
                 "created_at": datetime.now(tz=UTC).isoformat(),
             },
         )
 
-        _, dataset_remote_path, labels_remote_path = _build_remote_paths(
-            user_id,
-            swarm_run_id,
-            dataset_name,
-            labels_name,
-        )
+        remote_base = _build_remote_base_path(user_id, swarm_run_id)
 
         add_chat_message(
             swarm_run_id,
             "agent",
-            "Uploading dataset files to Modal volume...",
+            "Uploading dataset zip and extracting to Modal volume...",
             "load_modal",
         )
 
         with tempfile.TemporaryDirectory(prefix="dashboard-run-") as temp_dir:
-            dataset_local = Path(temp_dir) / dataset_name
-            labels_local = Path(temp_dir) / labels_name
-            dataset_local.write_bytes(await dataset.read())
-            labels_local.write_bytes(await labels.read())
+            zip_local = Path(temp_dir) / zip_name
+            extract_dir = Path(temp_dir) / "extracted"
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            zip_local.write_bytes(await dataset_zip.read())
 
             try:
-                await _upload_to_volume(dataset_local, dataset_remote_path, modal_env)
-                await _upload_to_volume(labels_local, labels_remote_path, modal_env)
+                _extract_zip(zip_local, extract_dir)
+                await _upload_dir_to_volume(extract_dir, remote_base, modal_env)
             except Exception as exc:  # noqa: BLE001
                 details = str(exc).strip()
                 fail_run(swarm_run_id, details[:3000], "load_modal")
@@ -126,7 +146,7 @@ def create_app() -> FastAPI:
         add_chat_message(
             swarm_run_id,
             "agent",
-            f"Upload complete. Dataset: /vol{dataset_remote_path} | Labels: /vol{labels_remote_path}",
+            f"Upload complete. Dataset extracted to /vol{remote_base}",
             "load_modal",
         )
         add_chat_message(
@@ -137,8 +157,7 @@ def create_app() -> FastAPI:
         )
 
         run_cfg = RunConfig(
-            dataset_path=f"/vol{dataset_remote_path}",
-            labels_path=f"/vol{labels_remote_path}",
+            dataset_base_path=f"/vol{remote_base}",
             task_description=task_description,
             max_approaches=SETTINGS.max_approaches,
             max_tuning_iterations=SETTINGS.max_tuning_iterations,

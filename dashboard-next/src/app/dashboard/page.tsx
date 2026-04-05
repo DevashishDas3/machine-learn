@@ -114,6 +114,7 @@ function PhaseBadge({ phase }: { phase: string }) {
     pending: { label: "PENDING", borderColor: "border-white/20", textColor: "text-paper/40" },
     prepare_dataset: { label: "PREPARING", borderColor: "border-azure/50", textColor: "text-azure" },
     load_modal: { label: "UPLOADING", borderColor: "border-violet-500/50", textColor: "text-violet-400" },
+    explorer_agent: { label: "EXPLORING", borderColor: "border-indigo-500/50", textColor: "text-indigo-400" },
     plan_agent: { label: "PLANNING", borderColor: "border-amber-500/50", textColor: "text-amber-400" },
     implement_agent: { label: "IMPLEMENTING", borderColor: "border-orange-500/50", textColor: "text-orange-400" },
     tune_agent: { label: "TUNING", borderColor: "border-teal-500/50", textColor: "text-teal-400" },
@@ -273,15 +274,17 @@ function ChatPane({
 const STAGE_CONFIG: Record<string, { x: number; y: number; label: string }> = {
   prepare_dataset: { x: 400, y: 50, label: "Prepare Dataset" },
   load_modal: { x: 400, y: 130, label: "Load to Modal Volume" },
-  plan_agent: { x: 400, y: 210, label: "PlanAgent" },
-  implement_agent: { x: 400, y: 290, label: "ImplementationAgent" },
-  tune_agent: { x: 400, y: 370, label: "TuningAgent" },
-  report_agent: { x: 400, y: 450, label: "ReportAgent" },
+  explorer_agent: { x: 400, y: 210, label: "ExplorerAgent" },
+  plan_agent: { x: 400, y: 290, label: "PlanAgent" },
+  implement_agent: { x: 400, y: 370, label: "ImplementationAgent" },
+  tune_agent: { x: 400, y: 450, label: "TuningAgent" },
+  report_agent: { x: 400, y: 530, label: "ReportAgent" },
 };
 
 const CONNECTIONS: Array<[string, string]> = [
   ["prepare_dataset", "load_modal"],
-  ["load_modal", "plan_agent"],
+  ["load_modal", "explorer_agent"],
+  ["explorer_agent", "plan_agent"],
   ["plan_agent", "implement_agent"],
   ["implement_agent", "tune_agent"],
   ["tune_agent", "report_agent"],
@@ -328,7 +331,7 @@ function Flowchart({
 
   return (
     <div className="w-full h-full flex items-center justify-center">
-      <svg viewBox="0 0 800 520" className="w-full h-auto max-h-[400px]">
+      <svg viewBox="0 0 800 620" className="w-full h-auto max-h-[440px]">
         <defs>
           <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur stdDeviation="4" result="coloredBlur" />
@@ -474,7 +477,7 @@ function Flowchart({
         {/* A100 Cluster Label */}
         <text
           x={620}
-          y={290}
+          y={370}
           fill="#0080FE40"
           className="font-mono"
           style={{ fontSize: "10px", fontFamily: "monospace" }}
@@ -944,8 +947,7 @@ function NewRunForm({
 }) {
   const [runName, setRunName] = useState("");
   const [taskDescription, setTaskDescription] = useState("");
-  const [datasetFile, setDatasetFile] = useState<File | null>(null);
-  const [labelsFile, setLabelsFile] = useState<File | null>(null);
+  const [datasetZip, setDatasetZip] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -958,12 +960,8 @@ function NewRunForm({
         setError("Task prompt is required.");
         return;
       }
-      if (!datasetFile) {
-        setError("Dataset file is required.");
-        return;
-      }
-      if (!labelsFile) {
-        setError("Labels file is required.");
+      if (!datasetZip) {
+        setError("Dataset zip file is required.");
         return;
       }
 
@@ -972,8 +970,7 @@ function NewRunForm({
         const formData = new FormData();
         formData.append("runName", runName.trim());
         formData.append("taskDescription", taskDescription.trim());
-        formData.append("dataset", datasetFile);
-        formData.append("labels", labelsFile);
+        formData.append("datasetZip", datasetZip);
 
         const res = await fetch("/api/runs/start", {
           method: "POST",
@@ -992,8 +989,7 @@ function NewRunForm({
         onStarted(payload.swarmRunId);
         setRunName("");
         setTaskDescription("");
-        setDatasetFile(null);
-        setLabelsFile(null);
+        setDatasetZip(null);
       } catch (submitError) {
         const message = submitError instanceof Error ? submitError.message : "Failed to start run.";
         setError(message);
@@ -1001,7 +997,7 @@ function NewRunForm({
         setIsSubmitting(false);
       }
     },
-    [datasetFile, labelsFile, onStarted, runName, taskDescription]
+    [datasetZip, onStarted, runName, taskDescription]
   );
 
   return (
@@ -1029,26 +1025,17 @@ function NewRunForm({
 
       <div className="space-y-2">
         <label className="block font-mono text-[10px] uppercase tracking-widest text-paper/40">
-          Dataset File
+          Dataset Zip
         </label>
         <input
           type="file"
+          accept=".zip"
           required
-          onChange={(e) => setDatasetFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => setDatasetZip(e.target.files?.[0] ?? null)}
+          title="Upload dataset as .zip file"
           className="w-full border border-white/20 bg-transparent px-2 py-1.5 font-mono text-[11px] text-paper file:mr-2 file:border-0 file:bg-azure file:px-2 file:py-1 file:font-mono file:text-[10px] file:uppercase file:tracking-widest file:text-obsidian"
         />
-      </div>
-
-      <div className="space-y-2">
-        <label className="block font-mono text-[10px] uppercase tracking-widest text-paper/40">
-          Labels File
-        </label>
-        <input
-          type="file"
-          required
-          onChange={(e) => setLabelsFile(e.target.files?.[0] ?? null)}
-          className="w-full border border-white/20 bg-transparent px-2 py-1.5 font-mono text-[11px] text-paper file:mr-2 file:border-0 file:bg-azure file:px-2 file:py-1 file:font-mono file:text-[10px] file:uppercase file:tracking-widest file:text-obsidian"
-        />
+        <p className="font-mono text-[10px] text-paper/40">Upload dataset as .zip file</p>
       </div>
 
       {error && (

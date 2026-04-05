@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List
 from pydantic import BaseModel, Field
 
 from config import SETTINGS
-from schemas import Approach, PlanResponse, RunConfig
+from schemas import Approach, DatasetMetadata, PlanResponse, RunConfig
 from utils.logging_utils import get_logger
 from utils.research import find_related_research
 from utils.costing import estimate_run_cost
@@ -40,6 +40,7 @@ class PlanAgent:
     async def _request_research_intent(
         self,
         run_cfg: RunConfig,
+        dataset_metadata: DatasetMetadata,
         findings_so_far: List[Dict[str, Any]],
         round_number: int,
     ) -> ResearchIntentResponse:
@@ -49,7 +50,9 @@ class PlanAgent:
             "You are selecting research queries for ML approach planning. "
             "Return JSON only.\n\n"
             f"Task:\n{run_cfg.task_description}\n\n"
-            f"Dataset path:\n{run_cfg.dataset_path}\n\n"
+            f"Dataset base path:\n{run_cfg.dataset_base_path}\n\n"
+            "Dataset metadata:\n"
+            f"{dataset_metadata.model_dump_json(indent=2)[:12000]}\n\n"
             f"Round: {round_number}/2\n"
             "Decide one focused search query and whether another research round is needed. "
             "Set continue_research=false if the current evidence is already enough to choose viable approaches.\n\n"
@@ -67,6 +70,7 @@ class PlanAgent:
     def _build_final_prompt(
         self,
         run_cfg: RunConfig,
+        dataset_metadata: DatasetMetadata,
         research_findings: List[Dict[str, Any]],
     ) -> str:
         findings_json = json.dumps(research_findings, ensure_ascii=False)[:30_000]
@@ -75,7 +79,9 @@ class PlanAgent:
             "Use the research findings to improve viability decisions. "
             "Prioritize approaches that are realistic for this dataset and run constraints.\n\n"
             f"Task:\n{run_cfg.task_description}\n\n"
-            f"Dataset path:\n{run_cfg.dataset_path}\n\n"
+            f"Dataset base path:\n{run_cfg.dataset_base_path}\n\n"
+            "Dataset metadata (JSON):\n"
+            f"{dataset_metadata.model_dump_json(indent=2)[:20000]}\n\n"
             f"Constraints:\n"
             f"- max_approaches={run_cfg.max_approaches}\n"
             f"- primary_metric={run_cfg.primary_metric}\n"
@@ -117,6 +123,7 @@ class PlanAgent:
     async def run(
         self,
         run_cfg: RunConfig,
+        dataset_metadata: DatasetMetadata,
         emit_hook: EmitHook | None = None,
     ) -> tuple[List[Approach], Dict[str, Any]]:
         research_findings: List[Dict[str, Any]] = []
@@ -127,7 +134,7 @@ class PlanAgent:
             extra={
                 "extra_fields": {
                     "max_rounds": max_research_rounds,
-                    "dataset_path": run_cfg.dataset_path,
+                    "dataset_base_path": run_cfg.dataset_base_path,
                     "task_preview": _snip(run_cfg.task_description, 220),
                 }
             },
@@ -138,6 +145,7 @@ class PlanAgent:
             try:
                 intent = await self._request_research_intent(
                     run_cfg=run_cfg,
+                    dataset_metadata=dataset_metadata,
                     findings_so_far=research_findings,
                     round_number=round_number,
                 )
@@ -155,7 +163,7 @@ class PlanAgent:
                 result = await asyncio.to_thread(
                     find_related_research,
                     task_description=run_cfg.task_description,
-                    dataset_path=run_cfg.dataset_path,
+                    dataset_path=run_cfg.dataset_base_path,
                     query_hint=intent.query,
                 )
                 papers = result.get("papers", [])
@@ -248,7 +256,7 @@ class PlanAgent:
         )
 
         schema = PlanResponse.model_json_schema()
-        prompt = self._build_final_prompt(run_cfg, research_findings)
+        prompt = self._build_final_prompt(run_cfg, dataset_metadata, research_findings)
         raw = await self.llm_server.generate.remote.aio(
             prompt=prompt,
             schema=schema,

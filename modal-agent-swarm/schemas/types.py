@@ -92,10 +92,25 @@ class CostEstimate(BaseModel):
     assumptions: Dict[str, Any] = Field(default_factory=dict)
 
 
+class FileInfo(BaseModel):
+    path: str
+    format: str
+    num_rows: Optional[int] = None
+    columns: List[str] = Field(default_factory=list)
+    file_extensions: List[str] = Field(default_factory=list)
+
+
+class DatasetMetadata(BaseModel):
+    file_tree: str
+    files: List[FileInfo] = Field(default_factory=list)
+    suggested_label_column: Optional[str] = None
+    task_type_hint: Optional[str] = None
+    num_samples: Optional[int] = None
+
+
 class RunConfig(BaseModel):
-    dataset_path: str
+    dataset_base_path: str
     task_description: str
-    labels_path: Optional[str] = None
     max_approaches: int = 5
     max_tuning_iterations: int = 3
     max_parallel_agents: int = 4

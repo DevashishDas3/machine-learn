@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from agents import (
+    ExplorerAgent,
     PlanAgent,
     ReportAgent,
     TuningAgent,
@@ -21,6 +22,7 @@ from schemas import (
     Approach,
     ApproachRun,
     CostEstimate,
+    DatasetMetadata,
     RunConfig,
     RunSummary,
     TrainingResult,
@@ -147,16 +149,12 @@ def _render_code_with_best_hyperparameters(
     max_containers=1,
 )
 def validate_dataset_inputs(
-    dataset_path: str, labels_path: str | None = None
+    dataset_base_path: str,
 ) -> Dict[str, Any]:
     data_volume.reload()
 
-    dataset = Path(dataset_path)
+    dataset = Path(dataset_base_path)
     dataset_exists = dataset.exists()
-
-    labels_exists = True
-    if labels_path:
-        labels_exists = Path(labels_path).exists()
 
     nearby_files: List[str] = []
     parent = dataset.parent
@@ -164,10 +162,8 @@ def validate_dataset_inputs(
         nearby_files = sorted(p.name for p in parent.iterdir())[:25]
 
     return {
-        "dataset_path": dataset_path,
+        "dataset_base_path": dataset_base_path,
         "dataset_exists": dataset_exists,
-        "labels_path": labels_path,
-        "labels_exists": labels_exists,
         "dataset_parent": str(parent),
         "nearby_files": nearby_files,
     }
@@ -224,8 +220,7 @@ async def _run_pipeline(
     ev = RunEventLogger(run_id)
     ev.emit(
         "pipeline_started",
-        dataset_path=run_cfg.dataset_path,
-        labels_path=run_cfg.labels_path,
+        dataset_base_path=run_cfg.dataset_base_path,
         task_description=run_cfg.task_description[:4000],
         max_approaches=run_cfg.max_approaches,
         max_tuning_iterations=run_cfg.max_tuning_iterations,
@@ -289,9 +284,26 @@ async def _run_pipeline(
     dash_stage("load_modal", "complete")
     dash_msg("agent", "LLM server ready", "load_modal")
     plan_agent = PlanAgent(llm)
+    explorer_agent = ExplorerAgent(llm)
     impl_agent = ImplementationAgent(llm)
     tuning_agent = TuningAgent(llm)
     report_agent = ReportAgent(llm)
+
+    dash_stage("explorer_agent", "active")
+    dash_msg(
+        "agent", "Exploring uploaded dataset and inferring schema...", "explorer_agent"
+    )
+    dataset_metadata: DatasetMetadata = await explorer_agent.run(
+        run_cfg.dataset_base_path,
+        run_cfg.task_description,
+    )
+    ev.emit("explorer_complete", dataset_metadata=dataset_metadata.model_dump())
+    dash_msg(
+        "agent",
+        f"Explorer complete. Task hint: {dataset_metadata.task_type_hint or 'unknown'}, label: {dataset_metadata.suggested_label_column or 'none'}",
+        "explorer_agent",
+    )
+    dash_stage("explorer_agent", "complete")
 
     # PlanAgent phase
     dash_stage("plan_agent", "active")
@@ -300,6 +312,7 @@ async def _run_pipeline(
     logger.info("running_plan_phase", extra={"extra_fields": {"run_id": run_id}})
     approaches, plan_research_digest = await plan_agent.run(
         run_cfg,
+        dataset_metadata,
         emit_hook=lambda event, payload: ev.emit(event, **payload),
     )
     cost_estimate = CostEstimate.model_validate(
@@ -364,9 +377,9 @@ async def _run_pipeline(
         try:
             code = await impl_agent.generate_code(
                 approach=approach,
-                dataset_path=run_cfg.dataset_path,
+                dataset_base_path=run_cfg.dataset_base_path,
+                dataset_metadata=dataset_metadata,
                 task_description=run_cfg.task_description,
-                labels_path=run_cfg.labels_path,
             )
         except Exception:  # noqa: BLE001
             code = FALLBACK_TRAIN_CODE
@@ -427,11 +440,11 @@ async def _run_pipeline(
                     result_payload = await run_implementation.remote.aio(
                         run_id=run_id,
                         approach=approach.model_dump(),
-                        dataset_path=run_cfg.dataset_path,
+                        dataset_base_path=run_cfg.dataset_base_path,
                         task_description=run_cfg.task_description,
                         generated_code=code,
                         hyperparameters=hp_override,
-                        labels_path=run_cfg.labels_path,
+                        dataset_metadata=dataset_metadata.model_dump(),
                     )
                     last_result = TrainingResult.model_validate(result_payload)
                 except Exception as exc:  # noqa: BLE001
@@ -462,12 +475,12 @@ async def _run_pipeline(
                 try:
                     code = await impl_agent.fix_code_after_failure(
                         approach=approach,
-                        dataset_path=run_cfg.dataset_path,
+                        dataset_base_path=run_cfg.dataset_base_path,
+                        dataset_metadata=dataset_metadata,
                         task_description=run_cfg.task_description,
                         failed_code=code,
                         runtime_error=last_result.error or "",
                         hyperparameters=hp_override,
-                        labels_path=run_cfg.labels_path,
                         logs_excerpt=last_result.logs_excerpt,
                     )
                     generated_code_by_name[approach.name] = code
@@ -556,7 +569,9 @@ async def _run_pipeline(
                 else (
                     "in-run"
                     if has_in_run_history
-                    else "cross-run" if has_cross_run_history else "none"
+                    else "cross-run"
+                    if has_cross_run_history
+                    else "none"
                 )
             )
             try:
@@ -633,7 +648,7 @@ async def _run_pipeline(
             )
             print(
                 f"[TUNING][{approach.name}] iter={iteration} history_source={history_source} "
-                f"in_run={len(in_run_history)-1} cross_run={len(cross_run_history)} "
+                f"in_run={len(in_run_history) - 1} cross_run={len(cross_run_history)} "
                 f"prev_{run_cfg.primary_metric}={prev_primary} "
                 f"new_{run_cfg.primary_metric}={new_primary} delta={delta_text} status={status}"
             )
@@ -798,9 +813,8 @@ async def _run_pipeline(
 
 @app.local_entrypoint()
 def main(
-    dataset_path: str,
+    dataset_base_path: str,
     task_description: str,
-    labels_path: str | None = None,
     max_approaches: int = SETTINGS.max_approaches,
     max_tuning_iterations: int = SETTINGS.max_tuning_iterations,
     max_parallel_agents: int = SETTINGS.max_parallel_agents,
@@ -812,9 +826,8 @@ def main(
 ) -> None:
     configure_logging()
     run_cfg = RunConfig(
-        dataset_path=dataset_path,
+        dataset_base_path=dataset_base_path,
         task_description=task_description,
-        labels_path=labels_path,
         max_approaches=max_approaches,
         max_tuning_iterations=max_tuning_iterations,
         max_parallel_agents=max_parallel_agents,

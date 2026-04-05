@@ -23,17 +23,13 @@ export async function POST(request: Request) {
   const formData = await request.formData();
   const runName = String(formData.get("runName") ?? "").trim();
   const taskDescription = String(formData.get("taskDescription") ?? "").trim();
-  const dataset = formData.get("dataset");
-  const labels = formData.get("labels");
+  const datasetZip = formData.get("datasetZip");
 
   if (!taskDescription) {
     return NextResponse.json({ error: "Task prompt is required." }, { status: 400 });
   }
-  if (!(dataset instanceof File)) {
-    return NextResponse.json({ error: "Dataset file is required." }, { status: 400 });
-  }
-  if (!(labels instanceof File)) {
-    return NextResponse.json({ error: "Labels file is required." }, { status: 400 });
+  if (!(datasetZip instanceof File)) {
+    return NextResponse.json({ error: "Dataset zip file is required." }, { status: 400 });
   }
 
   const launcherUrl = process.env.DASHBOARD_LAUNCHER_URL || "http://127.0.0.1:8001/start-run";
@@ -45,8 +41,7 @@ export async function POST(request: Request) {
     if (runName) {
       forward.append("run_name", runName);
     }
-    forward.append("dataset", dataset);
-    forward.append("labels", labels);
+    forward.append("dataset_zip", datasetZip);
 
     const upstream = await fetch(launcherUrl, {
       method: "POST",

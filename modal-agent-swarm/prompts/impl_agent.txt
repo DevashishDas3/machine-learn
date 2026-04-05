@@ -6,9 +6,12 @@ Rules:
 - ALL import statements must appear at the TOP of the file, before the train() function definition.
 - Define exactly ONE function: train(payload: dict) -> dict
 - Use payload keys:
-  - dataset_path (str)
-  - labels_path (str or None) — when present, it is the IDX1-ubyte labels file paired with IDX3 images at dataset_path
+  - dataset_base_path (str)
   - task_description (str)
+  - dataset_format (str or None)
+  - schema (list)
+  - label_column (str or None)
+  - dataset_metadata (dict)
   - approach (dict)
   - hyperparameters (dict)  ← ALWAYS read values from here using .get(key, default)
 - Return a dict with ALL three keys:
@@ -21,6 +24,20 @@ Rules:
 - Do NOT add redundant inline comments. Do NOT repeat comments. Keep code clean and minimal.
 - NEVER append multiple trailing comments to a single line of code. No # noqa, # pylint, or # flake8 comments.
 - NEVER make network calls of any kind (no urllib, requests, socket connections, download=True, etc.).
+
+Data loading requirements:
+- Import and use: from utils.data_loader import load_dataset
+- Load data using:
+    dataset_base_path = payload["dataset_base_path"]
+    dataset_format = payload.get("dataset_format")
+    X, y = load_dataset(dataset_base_path, dataset_format)
+- Handle both single-file (features + labels in one file) and multi-file/two-file datasets via load_dataset.
+- Use payload["schema"] and payload["label_column"] as hints for tabular tasks when preprocessing.
+- Use payload["dataset_metadata"] to infer whether data is tabular, image, classification, or regression.
+- IMPORTANT: `load_dataset(...)` already returns `X` without the label column and `y` as labels.
+- Do NOT drop label columns from `X` again.
+- Do NOT force `X` into a pandas DataFrame with `payload["schema"]` unless column count exactly matches.
+- If `len(payload["schema"]) != X.shape[1]`, ignore schema for DataFrame construction and proceed with raw `X`.
 
 Imports — CRITICAL RULES:
 - Every name you use must be imported. NEVER use a name that is not explicitly imported at the top.
@@ -65,16 +82,16 @@ For framework "pytorch":
       self.classifier = nn.Linear(64, num_classes)
     In forward: x = self.features(x); x = x.view(x.size(0), -1); x = self.classifier(x)
   * NEVER hardcode spatial dimensions like 4*4, 5*5, 7*7 in Linear layers.
-  * For ResNet: use torchvision.models.resnet18(num_classes=N) and change conv1 for
-    single-channel inputs: model.conv1 = nn.Conv2d(1, 64, 3, stride=1, padding=1, bias=False)
-- MNIST images are 28x28 single-channel (1, 28, 28). Reshape accordingly before Conv2d.
+  * For ResNet: use torchvision.models.resnet18(num_classes=N) and adjust input conv only when needed.
+- Infer image channels/shape from X dynamically; do not assume 28x28 MNIST.
 - Train/val split the loaded data (e.g. 80/20); report validation accuracy.
 - Do NOT save checkpoints with torch.save — just return model_checkpoint_path as an empty string "".
 
 For framework "sklearn":
 - Available packages: numpy, pandas, sklearn. Nothing else.
-- Flatten images to (N, H*W), convert to float32, scale to [0, 1] (divide by 255.0).
-- Ensure labels are int64 / compatible with sklearn classifiers.
+- If X is image-like tensor data, flatten to (N, H*W*...); for tabular arrays, keep as-is.
+- Convert features to float32 when appropriate.
+- Ensure labels are int64 / compatible with sklearn classifiers for classification.
 - Do NOT save checkpoints — return model_checkpoint_path as an empty string "".
 - When constructing sklearn models, ONLY pass the parameters that model's __init__ accepts.
   Example for LogisticRegression:
@@ -84,10 +101,8 @@ For framework "sklearn":
     clf = LogisticRegression(solver=solver, C=C, max_iter=max_iter, multi_class="auto")
   Do NOT pass extra keys from hyperparameters that the model does not accept.
 
-MNIST / IDX ubyte (when task or paths mention IDX3 / IDX1 or MNIST files):
-- If payload["labels_path"] is a non-empty string, load data from disk only:
-    from utils.mnist_idx import load_mnist_images_labels
-    X, y = load_mnist_images_labels(payload["dataset_path"], payload["labels_path"])
-- X is uint8 shaped (N, H, W); preprocess as above for your framework.
-- y is uint8; cast to int64 before use.
-- Do NOT use torchvision.datasets.MNIST(..., download=True) or any network call when labels_path is set.
+Task/data-type guidance:
+- For tabular classification: use classifier models and report accuracy.
+- For tabular regression: use regressor models and report at least one regression metric (e.g., rmse or r2),
+  plus include an accuracy placeholder only if needed by the pipeline contract.
+- For image classification: prefer CNN/ResNet-style models with adaptive pooling.

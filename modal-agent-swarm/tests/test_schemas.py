@@ -24,20 +24,19 @@ def test_training_result_metrics_normalized_to_float() -> None:
 
 def test_run_config_metric_normalization() -> None:
     cfg = RunConfig(
-        dataset_path="/vol/data.csv",
+        dataset_base_path="/vol/data",
         task_description="classify",
         primary_metric="  F1 ",
     )
     assert cfg.primary_metric == "f1"
 
 
-def test_run_config_labels_path_optional() -> None:
+def test_run_config_dataset_base_path_required() -> None:
     cfg = RunConfig(
-        dataset_path="/vol/mnist/train-images.idx3-ubyte",
-        task_description="MNIST",
-        labels_path="/vol/mnist/train-labels.idx1-ubyte",
+        dataset_base_path="/vol/mnist",
+        task_description="MNIST classification",
     )
-    assert cfg.labels_path.endswith("idx1-ubyte")
+    assert cfg.dataset_base_path == "/vol/mnist"
 
 
 def test_tuning_history_record_metric_normalization() -> None:

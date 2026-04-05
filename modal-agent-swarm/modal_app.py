@@ -15,6 +15,7 @@ supabase_secret = modal.Secret.from_name("supabase-secrets")
 # (pip_install alone does not ship local .py files; without this, workers raise ModuleNotFoundError.)
 _ROOT = Path(__file__).resolve().parent
 
+
 def _ignore_dev_artifacts(path: Path) -> bool:
     parts = path.parts
     return (
@@ -35,6 +36,7 @@ def _project_image(
         "pydantic>=2",
         "numpy",
         "pandas",
+        "pyarrow",
         "scikit-learn",
         "python-dotenv",
         "supabase",  # For dashboard updates
@@ -48,7 +50,9 @@ def _project_image(
         )
     if extra_env:
         img = img.env(extra_env)
-    return img.add_local_dir(_ROOT, remote_path="/root", copy=False, ignore=_ignore_dev_artifacts)
+    return img.add_local_dir(
+        _ROOT, remote_path="/root", copy=False, ignore=_ignore_dev_artifacts
+    )
 
 
 base_image = _project_image()

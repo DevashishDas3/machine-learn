@@ -7,13 +7,54 @@ from typing import Any, Dict, Optional
 
 from config import SETTINGS
 from modal_app import app, data_volume, train_image
-from schemas import Approach, TrainingResult
+from schemas import Approach, DatasetMetadata, TrainingResult
 from utils.code_runner import run_generated_code
 from utils.prompting import read_prompt
 from utils.volume_utils import ensure_run_dirs, write_json
 
 _MAX_CODEGEN_RETRIES = 2
 _MAX_FIX_COMPILE_RETRIES = 2
+
+
+def _select_dataset_hints(
+    dataset_metadata: Dict[str, Any] | None,
+) -> tuple[str | None, list[str], str | None]:
+    if not isinstance(dataset_metadata, dict):
+        return None, [], None
+
+    files = dataset_metadata.get("files")
+    label_column = dataset_metadata.get("suggested_label_column")
+    if not isinstance(files, list):
+        return None, [], label_column if isinstance(label_column, str) else None
+
+    # Prefer tabular files when present.
+    tabular = next(
+        (
+            f
+            for f in files
+            if isinstance(f, dict) and f.get("format") in {"csv", "json", "parquet"}
+        ),
+        None,
+    )
+    chosen = tabular or next((f for f in files if isinstance(f, dict)), None)
+    if not isinstance(chosen, dict):
+        return None, [], label_column if isinstance(label_column, str) else None
+
+    dataset_format = chosen.get("format")
+    raw_columns = chosen.get("columns")
+    schema: list[str] = []
+    if isinstance(raw_columns, list):
+        for col in raw_columns:
+            if isinstance(col, str) and col.strip():
+                schema.append(col.strip())
+
+    label = (
+        label_column if isinstance(label_column, str) and label_column.strip() else None
+    )
+    if label and schema:
+        schema = [col for col in schema if col != label]
+
+    return dataset_format if isinstance(dataset_format, str) else None, schema, label
 
 
 def _sanitize_generated_code(code: str) -> str:
@@ -38,7 +79,7 @@ def _sanitize_generated_code(code: str) -> str:
         cleaned.append(line)
 
     result = "\n".join(cleaned)
-    result = re.sub(r'(#[^\n]{0,200}?)(\s*#[^\n]*){10,}', r'\1', result)
+    result = re.sub(r"(#[^\n]{0,200}?)(\s*#[^\n]*){10,}", r"\1", result)
     return result
 
 
@@ -114,21 +155,16 @@ class ImplementationAgent:
     async def generate_code(
         self,
         approach: Approach,
-        dataset_path: str,
+        dataset_base_path: str,
+        dataset_metadata: DatasetMetadata,
         task_description: str,
         hyperparameters: Optional[Dict[str, Any]] = None,
-        labels_path: Optional[str] = None,
     ) -> str:
-        labels_block = (
-            f"Labels path (IDX1-ubyte, paired with images):\n{labels_path}\n\n"
-            if labels_path
-            else "Labels path: (not provided; infer from task or single-file dataset only)\n\n"
-        )
         base_prompt = (
             f"{self.prompt_template}\n\n"
             f"Task:\n{task_description}\n\n"
-            f"Dataset path (images / primary file):\n{dataset_path}\n\n"
-            f"{labels_block}"
+            f"Dataset base path:\n{dataset_base_path}\n\n"
+            f"Dataset metadata:\n{dataset_metadata.model_dump_json(indent=2)}\n\n"
             f"Approach:\n{approach.model_dump_json(indent=2)}\n\n"
             f"Hyperparameters override:\n{json.dumps(hyperparameters or {}, indent=2)}\n"
         )
@@ -161,26 +197,23 @@ class ImplementationAgent:
     async def fix_code_after_failure(
         self,
         approach: Approach,
-        dataset_path: str,
+        dataset_base_path: str,
+        dataset_metadata: DatasetMetadata,
         task_description: str,
         failed_code: str,
         runtime_error: str,
         hyperparameters: Optional[Dict[str, Any]] = None,
-        labels_path: Optional[str] = None,
         logs_excerpt: Optional[str] = None,
     ) -> str:
         """Regenerate training code after a failed execution (runtime or invalid output)."""
-        labels_block = (
-            f"Labels path (IDX1-ubyte, paired with images):\n{labels_path}\n\n"
-            if labels_path
-            else "Labels path: (not provided; infer from task or single-file dataset only)\n\n"
+        hp = (
+            hyperparameters if hyperparameters is not None else approach.hyperparameters
         )
-        hp = hyperparameters if hyperparameters is not None else approach.hyperparameters
         base_prompt = (
             f"{self.prompt_template}\n\n"
             f"Task:\n{task_description}\n\n"
-            f"Dataset path (images / primary file):\n{dataset_path}\n\n"
-            f"{labels_block}"
+            f"Dataset base path:\n{dataset_base_path}\n\n"
+            f"Dataset metadata:\n{dataset_metadata.model_dump_json(indent=2)}\n\n"
             f"Approach:\n{approach.model_dump_json(indent=2)}\n\n"
             f"Hyperparameters in effect:\n{json.dumps(hp, indent=2)}\n"
         )
@@ -232,11 +265,11 @@ class ImplementationAgent:
 def run_implementation(
     run_id: str,
     approach: Dict[str, Any],
-    dataset_path: str,
+    dataset_base_path: str,
     task_description: str,
     generated_code: str,
     hyperparameters: Optional[Dict[str, Any]] = None,
-    labels_path: Optional[str] = None,
+    dataset_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     data_volume.reload()
     approach_obj = Approach.model_validate(approach)
@@ -250,15 +283,22 @@ def run_implementation(
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     logs_path = dirs["logs"] / f"{approach_slug}.log"
 
+    dataset_format, schema, label_column = _select_dataset_hints(dataset_metadata)
+
     payload = {
-        "dataset_path": dataset_path,
-        "labels_path": labels_path,
+        "dataset_base_path": dataset_base_path,
         "task_description": task_description,
+        "dataset_metadata": dataset_metadata or {},
+        "dataset_format": dataset_format,
+        "schema": schema,
+        "label_column": label_column,
         "approach": approach_obj.model_dump(),
         "hyperparameters": hyperparameters or approach_obj.hyperparameters,
         "checkpoint_path": str(checkpoint_path),
     }
-    execution = run_generated_code(generated_code, payload, timeout_seconds=SETTINGS.train_timeout_seconds)
+    execution = run_generated_code(
+        generated_code, payload, timeout_seconds=SETTINGS.train_timeout_seconds
+    )
     if isinstance(execution, dict):
         execution = _coerce_train_output(execution)
     error = execution.get("error")

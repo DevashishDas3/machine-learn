@@ -1,3 +1,4 @@
+from agents.explorer_agent import ExplorerAgent
 from agents.impl_agent import ImplementationAgent, run_implementation
 from agents.llm_server import get_llm_server_handle
 from agents.plan_agent import PlanAgent
@@ -6,6 +7,7 @@ from agents.tuning_agent import TuningAgent
 
 __all__ = [
     "ImplementationAgent",
+    "ExplorerAgent",
     "get_llm_server_handle",
     "PlanAgent",
     "ReportAgent",

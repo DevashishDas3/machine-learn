@@ -53,7 +53,7 @@ class ReportAgent:
         payload = {
             "run_id": run_id,
             "task_description": _truncate(run_cfg.task_description, 2000),
-            "dataset_path": run_cfg.dataset_path,
+            "dataset_base_path": run_cfg.dataset_base_path,
             "primary_metric": run_cfg.primary_metric,
             "approach_runs": _compact_runs(approach_runs),
             "recommendation": recommendation,
@@ -77,7 +77,7 @@ class ReportAgent:
             "## Problem",
             run_cfg.task_description,
             "",
-            f"Dataset path: `{run_cfg.dataset_path}`",
+            f"Dataset base path: `{run_cfg.dataset_base_path}`",
             "",
             "## Approaches",
         ]

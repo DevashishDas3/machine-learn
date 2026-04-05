@@ -67,6 +67,7 @@ def create_run(
         "stages": [
             {"id": "prepare_dataset", "label": "Prepare Dataset", "status": "pending"},
             {"id": "load_modal", "label": "Load to Modal Volume", "status": "pending"},
+            {"id": "explorer_agent", "label": "ExplorerAgent", "status": "pending"},
             {"id": "plan_agent", "label": "PlanAgent", "status": "pending"},
             {
                 "id": "implement_agent",
@@ -78,7 +79,8 @@ def create_run(
         ],
         "connections": [
             {"from": "prepare_dataset", "to": "load_modal", "active": False},
-            {"from": "load_modal", "to": "plan_agent", "active": False},
+            {"from": "load_modal", "to": "explorer_agent", "active": False},
+            {"from": "explorer_agent", "to": "plan_agent", "active": False},
             {"from": "plan_agent", "to": "implement_agent", "active": False},
             {"from": "implement_agent", "to": "tune_agent", "active": False},
             {"from": "tune_agent", "to": "report_agent", "active": False},

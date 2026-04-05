@@ -22,7 +22,7 @@ export function processEvents(events: RawEvent[]): PipelineState | null {
         state.runId = ev.run_id ?? "";
         state.startedAt = ev.ts;
         state.taskDescription = ev.task_description ?? "";
-        state.datasetPath = ev.dataset_path ?? "";
+        state.datasetPath = ev.dataset_base_path ?? ev.dataset_path ?? "";
         state.maxApproaches = ev.max_approaches ?? 5;
         state.maxTuningIterations = ev.max_tuning_iterations ?? 3;
         state.phase = "planning";
