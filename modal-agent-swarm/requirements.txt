@@ -1,0 +1,11 @@
+modal
+pydantic>=2
+python-dotenv
+streamlit>=1.28.0
+typing-extensions
+pytest
+openai
+fastapi
+uvicorn
+python-multipart
+supabase

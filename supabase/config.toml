@@ -1,0 +1,18 @@
+# Supabase local development config
+# For local development, use `supabase start` to spin up local services.
+# This file can be created/updated with `supabase init`.
+
+[api]
+enabled = true
+port = 54321
+
+[db]
+port = 54322
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+site_url = "http://localhost:3000"
+redirect_urls = ["http://localhost:3000/**"]

@@ -18,12 +18,14 @@ Operational guide for coding agents working in this repository.
 ## Repository map
 
 - `orchestrator.py`: main async pipeline (`Plan -> Implement -> Tune -> Report`)
+- `dashboard_launcher_service.py`: local FastAPI launcher that creates run rows, uploads files to Modal Volume, and spawns orchestrator via Modal SDK
 - `modal_app.py`: Modal app/resources and function images
+- `llm_service.py`: deployed shared LLM service app (`ml-agent-llm-service`)
 - `agents/`: plan/implementation/tuning/report agents + shared LLM server
 - `schemas/`: Pydantic models for phase contracts and run summaries
 - `utils/`: parsing, code execution, logging, volume/event helpers
 - `tests/`: pytest tests for schemas/parsing/MNIST helpers
-- `dashboard-next/`: Next.js dashboard for local run event visualization
+- `dashboard-next/`: Next.js dashboard with auth, run creation form, and realtime run visualization
 - `runs_local/`: local event logs and run state for dashboard API routes
 
 ## Setup commands
@@ -59,6 +61,8 @@ Use these exact commands unless you intentionally need a variant.
   - `pytest -q -k parsing`
 - Run orchestrator locally through Modal:
   - `modal run orchestrator.py --dataset-path /vol/datasets/sample.csv --task-description "Binary classification for churn prediction"`
+- Deploy shared LLM service app:
+  - `modal deploy llm_service.py`
 - Deploy Modal app resources:
   - `modal deploy orchestrator.py`
 - Run Streamlit dashboard:
@@ -74,6 +78,17 @@ Use these exact commands unless you intentionally need a variant.
   - `npm run start`
 - Type-check without emit (no npm script defined; run directly):
   - `npx tsc --noEmit`
+
+### Dashboard run-start flow (local)
+
+- Start local launcher service:
+  - `modal-agent-swarm/dashboard_launcher_service.py`
+  - run with `uv run python dashboard_launcher_service.py` (or `python dashboard_launcher_service.py`)
+- Start API route:
+  - `dashboard-next/src/app/api/runs/start/route.ts`
+  - forwards dashboard form data to launcher service
+- Optional local env override:
+  - `DASHBOARD_LAUNCHER_URL` (default `http://127.0.0.1:8001/start-run`)
 
 ### Lint status
 
@@ -150,6 +165,7 @@ Conventions observed in `dashboard-next/src`:
 - For user/model-provided text, sanitize and validate before execution/use.
 - Never assume model outputs are valid JSON or schema-compliant.
 - Guard file and network operations with clear fallbacks where operationally appropriate.
+- For dashboard API errors, return structured JSON (`error` + actionable `details`) rather than generic 500 text.
 
 ## Testing guidance
 

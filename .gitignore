@@ -1,7 +1,13 @@
-runs_local/
+modal-agent-swarm/runs_local/
+modal-agent-swarm/__pycache__
 dashboard-next/.next/
 dashboard-next/node_modules/
+dashboard-next/.env.local
 
 .venv/
 node_modules/
 __pycache__/
+
+.secrets.env
+
+runs_local/

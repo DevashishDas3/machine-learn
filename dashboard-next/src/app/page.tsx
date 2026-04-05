@@ -1,251 +1,198 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
-import { RawEvent, PipelineState } from "@/types";
-import { processEvents } from "@/lib/processEvents";
-import { formatTs } from "@/lib/utils";
-import PipelineView from "@/components/PipelineView";
-import CodeModal from "@/components/CodeModal";
-import ReportModal from "@/components/ReportModal";
-import { ApproachState } from "@/types";
+import Link from "next/link";
+import { motion } from "framer-motion";
+import Navbar from "@/components/Navbar";
+import NeuralCanvas from "@/components/NeuralCanvas";
+import TerminalWindow from "@/components/TerminalWindow";
+import ArchitectureDiagram from "@/components/ArchitectureDiagram";
 
-const POLL_MS = 2000;
-
-function SpinnerIcon({ className = "" }: { className?: string }) {
+export default function LandingPage() {
   return (
-    <svg
-      className={`animate-spin ${className}`}
-      xmlns="http://www.w3.org/2000/svg"
-      fill="none"
-      viewBox="0 0 24 24"
-    >
-      <circle
-        className="opacity-25"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        strokeWidth="4"
-      />
-      <path
-        className="opacity-75"
-        fill="currentColor"
-        d="M4 12a8 8 0 018-8v8H4z"
-      />
-    </svg>
-  );
-}
+    <main className="relative min-h-screen overflow-hidden bg-obsidian">
+      {/* Neural Network Background */}
+      <NeuralCanvas />
 
-export default function Home() {
-  const [runs, setRuns] = useState<string[]>([]);
-  const [selectedRun, setSelectedRun] = useState<string>("");
-  const [pipeline, setPipeline] = useState<PipelineState | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [isLive, setIsLive] = useState(true);
-  const [codeTarget, setCodeTarget] = useState<ApproachState | null>(null);
-  const [showReport, setShowReport] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+      {/* Navigation */}
+      <Navbar />
 
-  // Load run list
-  useEffect(() => {
-    fetch("/api/runs")
-      .then((r) => r.json())
-      .then((d) => {
-        setRuns(d.runs ?? []);
-        if (d.runs?.length) setSelectedRun(d.runs[0]);
-      });
-  }, []);
+      {/* Hero Section */}
+      <section className="relative flex min-h-screen flex-col items-center justify-center px-6 pt-14">
+        {/* Gradient overlay for depth */}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-obsidian via-transparent to-obsidian" />
 
-  const fetchEvents = useCallback(async (runId: string) => {
-    if (!runId) return;
-    try {
-      const res = await fetch(`/api/runs/${runId}/events`);
-      const data = await res.json();
-      const events: RawEvent[] = data.events ?? [];
-      const state = processEvents(events);
-      setPipeline(state);
-      setLastUpdated(new Date());
-      // Stop polling when done
-      if (state?.phase === "complete") setIsLive(false);
-    } catch {
-      // silently ignore transient fetch errors
-    }
-  }, []);
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.6 }}
+          className="relative z-10 text-center"
+        >
+          {/* Eyebrow text */}
+          <motion.p
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.2 }}
+            className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-azure"
+          >
+            Automated ML Pipelines on Modal GPUs
+          </motion.p>
 
-  // Polling
-  useEffect(() => {
-    if (!selectedRun) return;
-    fetchEvents(selectedRun);
+          {/* Main Headline */}
+          <h1 className="mb-6 font-sans text-5xl font-bold leading-none tracking-tight text-paper md:text-7xl lg:text-8xl">
+            <span className="font-mono text-azure">machine</span>
+            <span className="font-mono text-paper/60">(</span>
+            <span className="font-mono text-paper">learn</span>
+            <span className="font-mono text-paper/60">);</span>
+          </h1>
 
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    if (isLive) {
-      intervalRef.current = setInterval(
-        () => fetchEvents(selectedRun),
-        POLL_MS
-      );
-    }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [selectedRun, isLive, fetchEvents]);
+          {/* Subheadline */}
+          <p className="mx-auto mb-10 max-w-2xl font-mono text-sm leading-relaxed text-paper/60 md:text-base">
+            Plan, implement, tune, and report — all automated. Orchestrate ML
+            pipelines with locally hosted LLMs on Modal GPUs. From idea to
+            production in one command.
+          </p>
 
-  // Reset live when run changes
-  useEffect(() => {
-    setIsLive(true);
-    setPipeline(null);
-  }, [selectedRun]);
-
-  const isComplete = pipeline?.phase === "complete";
-
-  return (
-    <div className="flex flex-col h-screen overflow-hidden">
-      {/* Top bar */}
-      <header className="flex items-center gap-4 px-5 py-3 bg-zinc-900 border-b border-zinc-800 shrink-0">
-        {/* Logo */}
-        <div className="flex items-center gap-2 mr-2">
-          <div className="w-7 h-7 rounded-lg bg-violet-600 flex items-center justify-center text-xs font-bold text-white">
-            ML
+          {/* CTA Buttons */}
+          <div className="flex flex-col items-center justify-center gap-4 sm:flex-row">
+            <Link
+              href="/login"
+              className="group relative overflow-hidden border border-azure bg-azure px-8 py-3 font-mono text-sm uppercase tracking-widest text-obsidian transition-all hover:shadow-[0_0_20px_rgba(0,128,254,0.5)]"
+            >
+              <span className="relative z-10">Get Started</span>
+            </Link>
+            <Link
+              href="https://github.com"
+              className="group border border-white/20 px-8 py-3 font-mono text-sm uppercase tracking-widest text-paper transition-all hover:border-paper hover:bg-paper/5"
+            >
+              View Source
+            </Link>
           </div>
-          <span className="font-semibold text-zinc-100 text-sm tracking-wide">
-            Agent Swarm
-          </span>
+        </motion.div>
+
+        {/* Terminal Window */}
+        <div className="relative z-10 mt-16 w-full max-w-4xl px-4">
+          <TerminalWindow />
         </div>
 
-        {/* Run selector */}
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500 text-xs">Run</span>
-          <select
-            className="bg-zinc-800 border border-zinc-700 rounded-md px-2.5 py-1 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-violet-500 min-w-[220px]"
-            value={selectedRun}
-            onChange={(e) => setSelectedRun(e.target.value)}
-          >
-            {runs.length === 0 && (
-              <option value="">(no runs yet)</option>
-            )}
-            {runs.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Refresh controls */}
-        <div className="flex items-center gap-3 ml-auto">
-          {lastUpdated && (
-            <span className="text-zinc-500 text-xs">
-              Updated {formatTs(lastUpdated.toISOString())}
+        {/* Scroll indicator */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1.5 }}
+          className="absolute bottom-8 left-1/2 -translate-x-1/2"
+        >
+          <div className="flex flex-col items-center gap-2">
+            <span className="font-mono text-xs uppercase tracking-widest text-paper/30">
+              Scroll
             </span>
-          )}
-          <button
-            onClick={() => {
-              if (!isLive) {
-                setIsLive(true);
-              }
-              fetchEvents(selectedRun);
-            }}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-xs text-zinc-300 transition-colors"
-          >
-            <SpinnerIcon className={`w-3 h-3 ${isLive && !isComplete ? "text-violet-400" : "text-zinc-500"}`} />
-            {isLive && !isComplete ? "Live" : "Refresh"}
-          </button>
-
-          {/* Phase badge */}
-          {pipeline && (
-            <PhaseBadge phase={pipeline.phase} />
-          )}
-        </div>
-      </header>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar: previous runs */}
-        {runs.length > 1 && (
-          <aside className="w-52 shrink-0 bg-zinc-900 border-r border-zinc-800 overflow-y-auto py-3 px-2">
-            <p className="text-zinc-500 text-xs px-2 mb-2 uppercase tracking-wider">
-              Runs
-            </p>
-            {runs.map((r) => (
-              <button
-                key={r}
-                onClick={() => setSelectedRun(r)}
-                className={`w-full text-left px-2.5 py-2 rounded-md text-xs mb-0.5 transition-colors truncate ${
-                  r === selectedRun
-                    ? "bg-violet-600/20 text-violet-300 border border-violet-600/30"
-                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
-                }`}
-              >
-                {r}
-              </button>
-            ))}
-          </aside>
-        )}
-
-        {/* Main content */}
-        <main className="flex-1 overflow-y-auto px-6 py-5">
-          {!selectedRun || !pipeline ? (
-            <EmptyState hasRuns={runs.length > 0} />
-          ) : (
-            <PipelineView
-              pipeline={pipeline}
-              onViewCode={(approach) => setCodeTarget(approach)}
-              onViewReport={() => setShowReport(true)}
+            <motion.div
+              animate={{ y: [0, 8, 0] }}
+              transition={{ repeat: Infinity, duration: 1.5 }}
+              className="h-6 w-[1px] bg-paper/30"
             />
-          )}
-        </main>
-      </div>
+          </div>
+        </motion.div>
+      </section>
 
-      {/* Modals */}
-      {codeTarget && (
-        <CodeModal
-          approach={codeTarget}
-          onClose={() => setCodeTarget(null)}
-        />
-      )}
-      {showReport && pipeline?.report && (
-        <ReportModal
-          report={pipeline.report}
-          recommendation={pipeline.recommendation}
-          onClose={() => setShowReport(false)}
-        />
-      )}
-    </div>
-  );
-}
+      {/* Architecture Diagram Section */}
+      <section className="relative z-10 border-t border-white/10 bg-obsidian py-24">
+        <div className="mx-auto max-w-7xl px-6">
+          <motion.div
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            className="mb-12 text-center"
+          >
+            <p className="mb-2 font-mono text-xs uppercase tracking-[0.3em] text-azure">
+              System Architecture
+            </p>
+            <h2 className="font-sans text-3xl font-bold tracking-tight text-paper md:text-4xl">
+              How{" "}
+              <span className="font-mono text-azure">machine</span>
+              <span className="font-mono text-paper/60">(</span>
+              <span className="font-mono text-paper">learn</span>
+              <span className="font-mono text-paper/60">);</span>
+              {" "}works
+            </h2>
+          </motion.div>
 
-function PhaseBadge({ phase }: { phase: string }) {
-  const map: Record<string, { label: string; cls: string }> = {
-    not_started: { label: "Not started", cls: "bg-zinc-700 text-zinc-400" },
-    planning: { label: "Planning", cls: "bg-blue-900/50 text-blue-300 border border-blue-800" },
-    codegen: { label: "Code Gen", cls: "bg-violet-900/50 text-violet-300 border border-violet-800" },
-    training: { label: "Training", cls: "bg-amber-900/50 text-amber-300 border border-amber-800" },
-    tuning: { label: "Tuning", cls: "bg-orange-900/50 text-orange-300 border border-orange-800" },
-    reporting: { label: "Reporting", cls: "bg-teal-900/50 text-teal-300 border border-teal-800" },
-    complete: { label: "Complete", cls: "bg-green-900/50 text-green-300 border border-green-800" },
-  };
-  const { label, cls } = map[phase] ?? map.not_started;
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>
-      {label}
-    </span>
-  );
-}
+          <ArchitectureDiagram />
+        </div>
+      </section>
 
-function EmptyState({ hasRuns }: { hasRuns: boolean }) {
-  return (
-    <div className="flex flex-col items-center justify-center h-full text-center gap-4">
-      <div className="w-16 h-16 rounded-2xl bg-violet-600/10 border border-violet-600/20 flex items-center justify-center">
-        <span className="text-3xl">🧠</span>
-      </div>
-      <div>
-        <p className="text-zinc-300 font-medium mb-1">
-          {hasRuns ? "Select a run" : "No runs yet"}
-        </p>
-        <p className="text-zinc-500 text-sm max-w-xs">
-          {hasRuns
-            ? "Choose a run from the selector above to inspect its pipeline."
-            : "Start a run with: modal run orchestrator.py --dataset-path … --task-description …"}
-        </p>
-      </div>
-    </div>
+      {/* Features Grid Section */}
+      <section className="relative z-10 border-t border-white/10 bg-obsidian py-24">
+        <div className="mx-auto max-w-7xl px-6">
+          <motion.h2
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            className="mb-16 text-center font-sans text-3xl font-bold tracking-tight text-paper md:text-4xl"
+          >
+            Built for{" "}
+            <span className="text-azure">ML engineers</span>
+          </motion.h2>
+
+          <div className="grid gap-[1px] bg-white/10 md:grid-cols-3">
+            {[
+              {
+                title: "GPU Orchestration",
+                desc: "A100, H100, L4 — scale GPU workloads instantly with Modal's serverless infrastructure.",
+                code: "@app.cls(gpu=\"A100\")",
+              },
+              {
+                title: "vLLM Integration",
+                desc: "Deploy LLMs with optimized inference. PagedAttention, continuous batching, built-in.",
+                code: "engine = vllm.AsyncEngine()",
+              },
+              {
+                title: "Agent Coordination",
+                desc: "asyncio.gather() your agents. Parallel execution, automatic retries, observable.",
+                code: "await asyncio.gather(*agents)",
+              },
+            ].map((feature, i) => (
+              <motion.div
+                key={i}
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ delay: i * 0.1 }}
+                className="bg-obsidian p-8"
+              >
+                <code className="mb-4 block font-mono text-xs text-azure">
+                  {feature.code}
+                </code>
+                <h3 className="mb-2 font-sans text-xl font-semibold text-paper">
+                  {feature.title}
+                </h3>
+                <p className="font-mono text-sm leading-relaxed text-paper/50">
+                  {feature.desc}
+                </p>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t border-white/10 bg-obsidian py-8">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-6">
+          <span className="font-mono text-xs text-paper/40">
+            © 2026 machine(learn);
+          </span>
+          <div className="flex gap-6">
+            {["GitHub", "Discord", "Twitter"].map((link) => (
+              <a
+                key={link}
+                href="#"
+                className="font-mono text-xs uppercase tracking-widest text-paper/40 transition-colors hover:text-paper"
+              >
+                {link}
+              </a>
+            ))}
+          </div>
+        </div>
+      </footer>
+    </main>
   );
 }

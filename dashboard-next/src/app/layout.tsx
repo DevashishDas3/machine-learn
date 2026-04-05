@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ML Agent Swarm — Dashboard",
-  description: "Real-time monitor for the ML Agent Swarm pipeline",
+  title: "ML Agent Swarm | Distributed Intelligence Network",
+  description: "Orchestrate ML pipelines with Modal GPUs and vLLM. Deploy agent swarms at scale.",
 };
 
 export default function RootLayout({
@@ -12,8 +12,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body className="min-h-screen bg-zinc-950 text-zinc-100 antialiased">
+    <html lang="en">
+      <head>
+        <link
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+          rel="stylesheet"
+        />
+      </head>
+      <body className="min-h-screen bg-obsidian font-sans text-paper antialiased">
         {children}
       </body>
     </html>

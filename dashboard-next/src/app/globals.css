@@ -2,54 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --bg: #09090b;
-  --surface: #18181b;
-  --card: #1f1f23;
-  --border: #2e2e35;
-  --accent: #7c3aed;
-  --accent-light: #8b5cf6;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  background: var(--bg);
-  color: #e4e4f0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* Scrollbar */
+/* Custom scrollbar for terminal aesthetic */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
+
 ::-webkit-scrollbar-track {
-  background: var(--surface);
+  background: #0B1215;
 }
+
 ::-webkit-scrollbar-thumb {
-  background: #3f3f50;
-  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
 }
+
 ::-webkit-scrollbar-thumb:hover {
-  background: #5a5a70;
+  background: rgba(255, 255, 255, 0.2);
 }
 
-/* Code blocks */
-pre,
-code {
-  font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+/* Selection color */
+::selection {
+  background: rgba(0, 128, 254, 0.3);
+  color: #F9F8F7;
 }
 
-@layer utilities {
-  .bg-card {
-    background-color: var(--card);
-  }
-  .border-dim {
-    border-color: var(--border);
-  }
+/* Focus ring override */
+*:focus-visible {
+  outline: 1px solid #0080FE;
+  outline-offset: 2px;
 }
