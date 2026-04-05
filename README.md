@@ -1,74 +1,164 @@
-# ML Agent Swarm
+# machine(learn);
 
 Automated ML approach planning, implementation, tuning, and reporting on Modal GPU infrastructure with a shared vLLM backend.
 
-## Project layout
+## Project Layout
 
-- `modal_app.py`: Modal app and shared resource definitions.
-- `orchestrator.py`: 4-phase async pipeline (`Plan -> Implement -> Tune -> Report`).
-- `agents/`: LLM server and agent modules.
-- `schemas/`: Pydantic contracts for all phase handoffs.
-- `utils/`: code execution, parsing, cost estimation, volume helpers.
-- `prompts/`: prompt templates per agent role.
+```
+├── modal-agent-swarm/       # Modal backend (Python)
+│   ├── modal_app.py         # Modal app and shared resource definitions
+│   ├── orchestrator.py      # 4-phase async pipeline (Plan → Implement → Tune → Report)
+│   ├── agents/              # LLM server and agent modules
+│   ├── schemas/             # Pydantic contracts for all phase handoffs
+│   ├── supabase_helpers.py  # Supabase integration for dashboard updates
+│   └── test_dashboard.py    # Test script for simulating pipeline runs
+│
+├── dashboard-next/          # Next.js frontend (TypeScript)
+│   └── src/app/
+│       ├── page.tsx         # Landing page
+│       ├── login/           # Email/password auth
+│       ├── signup/          # Account creation
+│       └── dashboard/       # Main ML pipeline dashboard
+│
+└── supabase/                # Database schema
+    └── migrations/          # SQL migrations
+```
 
-## Setup
+## Quick Start
 
-1. Create a Python 3.11+ environment.
-2. Install dependencies:
-   - `pip install -r requirements.txt`
-3. Copy `.env.example` to `.env` and set model/GPU/timeouts for your environment.
-4. Authenticate with Modal:
-   - `modal setup`
+### 1. Setup Backend (Modal)
 
-## Run
+```bash
+cd modal-agent-swarm
 
-Use a small CSV first to validate flow:
+# Create virtual environment
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+# source .venv/bin/activate  # macOS/Linux
 
-`modal run orchestrator.py --dataset-path /vol/datasets/sample.csv --task-description "Binary classification for churn prediction"`
+# Install dependencies
+pip install -r requirements.txt
+pip install supabase
 
-For low-latency runs, deploy the dedicated LLM service once and keep it warm:
+# Authenticate with Modal
+modal setup
 
-`modal deploy llm_service.py`
+# Create Supabase secret
+modal secret create supabase-secrets SUPABASE_URL="https://your-project.supabase.co" SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
 
-Then run orchestrator normally; it will use the deployed LLM service by default.
+# Deploy
+modal deploy orchestrator.py
+```
 
-The run writes artifacts into the configured Modal Volume under:
+### 2. Setup Frontend (Next.js)
 
-- `/vol/runs/<run_id>/src`
-- `/vol/runs/<run_id>/checkpoints`
-- `/vol/runs/<run_id>/logs`
-- `/vol/runs/<run_id>/reports/report.md`
-- `/vol/runs/<run_id>/summaries/run_summary.json`
+```bash
+cd dashboard-next
 
-## Deploy
+# Install dependencies
+npm install
 
-Deploy app resources:
+# Copy environment file and add your Supabase keys
+cp .env.local.example .env.local
+# Edit .env.local with your Supabase URL and anon key
 
-`modal deploy orchestrator.py`
+# Start dev server
+npm run dev
+```
 
-Deploy always-on LLM service:
+### 3. Setup Database (Supabase)
 
-`modal deploy llm_service.py`
+Run the SQL from `supabase/migrations/20260404_init.sql` in your Supabase SQL Editor.
 
-Add files to volume:
+## Testing the Dashboard
 
-modal volume put ml-agent-swarm-data .\train-images.idx3-ubyte /datasets/mnist/train-images.idx3-ubyte
+### Option A: Frontend Test (Recommended)
 
-Stream logs:
+1. Start the frontend: `npm run dev` (in dashboard-next)
+2. Go to http://localhost:3000/signup and create an account
+3. You'll be redirected to the dashboard
+4. Type a task description like "Classify MNIST digits" and press Enter
+5. Watch the pipeline execute with live updates!
 
-`modal app logs ml-agent-swarm`
+### Option B: CLI Test Script
 
-`modal app logs ml-agent-llm-service`
+1. Start the frontend: `npm run dev`
+2. Create an account at http://localhost:3000/signup
+3. Get your user ID from **Supabase Dashboard → Authentication → Users**
+4. Run the test script:
 
-## LLM service settings
+```bash
+cd modal-agent-swarm
+python test_dashboard.py YOUR_USER_ID
+```
 
-- `LLM_USE_DEPLOYED_SERVICE` (default `true`): if `true`, orchestrator uses deployed service via `modal.Cls.from_name(...)`.
-- `LLM_SERVICE_APP_NAME` (default `ml-agent-llm-service`): deployed LLM app name.
-- `LLM_SERVICE_CLASS_NAME` (default `LLMServer`): deployed class name inside the LLM service app.
-- `MODAL_ENVIRONMENT` (default `main`): environment used when resolving the deployed class.
+5. Watch the dashboard update in realtime!
 
-## Testing
+## Running a Real Pipeline
 
-Run quick unit tests:
+```bash
+modal run orchestrator.py \
+  --dataset-path /vol/datasets/mnist \
+  --task-description "Classify handwritten digits with >98% accuracy"
+```
 
-`pytest -q`
+With dashboard tracking:
+```bash
+modal run orchestrator.py \
+  --dataset-path /vol/datasets/mnist \
+  --task-description "Classify handwritten digits" \
+  --swarm-run-id "uuid-from-supabase"
+```
+
+## Architecture
+
+```
+User Input (Dashboard)
+        ↓
+   Supabase DB  ←──────────────────┐
+        ↓                          │
+   Modal Backend                   │
+        ↓                          │
+┌──────────────────────────────────┤
+│  PlanAgent                       │
+│    ↓ (generates approaches)      │
+│  ImplementationAgent (A100 GPU)  │  ← Updates Supabase
+│    ↓ (trains models)             │     in realtime
+│  TuningAgent                     │
+│    ↓ (optimizes hyperparams)     │
+│  ReportAgent                     │
+│    ↓ (generates report)          │
+└──────────────────────────────────┘
+        ↓
+   Final Results in Dashboard
+```
+
+## Environment Variables
+
+### Frontend (.env.local)
+```
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+```
+
+### Backend (Modal Secret: supabase-secrets)
+```
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+```
+
+## LLM Service Settings
+
+- `LLM_USE_DEPLOYED_SERVICE` (default `true`): Use deployed LLM service
+- `LLM_SERVICE_APP_NAME` (default `ml-agent-llm-service`): Deployed app name
+- `MODAL_ENVIRONMENT` (default `main`): Modal environment
+
+## Local Development
+
+```bash
+# Run tests
+pytest -q
+
+# Stream Modal logs
+modal app logs ml-agent-swarm
+```

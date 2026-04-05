@@ -1,34 +1,55 @@
 "use client";
 
+import { useState } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
-import AuthForm from "@/components/AuthForm";
-
-function LogoPlaceholder() {
-  return (
-    <svg
-      width="40"
-      height="40"
-      viewBox="0 0 32 32"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className="text-azure"
-    >
-      <circle cx="16" cy="8" r="3" fill="currentColor" />
-      <circle cx="8" cy="20" r="3" fill="currentColor" />
-      <circle cx="24" cy="20" r="3" fill="currentColor" />
-      <circle cx="16" cy="26" r="2" fill="currentColor" opacity="0.6" />
-      <line x1="16" y1="11" x2="8" y2="17" stroke="currentColor" strokeWidth="1.5" />
-      <line x1="16" y1="11" x2="24" y2="17" stroke="currentColor" strokeWidth="1.5" />
-      <line x1="8" y1="23" x2="16" y2="26" stroke="currentColor" strokeWidth="1" opacity="0.6" />
-      <line x1="24" y1="23" x2="16" y2="26" stroke="currentColor" strokeWidth="1" opacity="0.6" />
-    </svg>
-  );
-}
+import { useRouter } from "next/navigation";
+import { createBrowserSupabaseClient } from "@/lib/supabase-client";
 
 export default function SignupPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  const supabase = createBrowserSupabaseClient();
+  const router = useRouter();
+
+  const handleSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setMessage(null);
+
+    if (password !== confirmPassword) {
+      setMessage({ type: "error", text: "Passwords do not match" });
+      setLoading(false);
+      return;
+    }
+
+    if (password.length < 6) {
+      setMessage({ type: "error", text: "Password must be at least 6 characters" });
+      setLoading(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
+
+    if (error) {
+      setMessage({ type: "error", text: error.message });
+      setLoading(false);
+    } else {
+      setMessage({ type: "success", text: "Account created! Redirecting..." });
+      setTimeout(() => router.push("/dashboard"), 1500);
+    }
+  };
+
   return (
     <main className="relative flex min-h-screen flex-col items-center justify-center bg-obsidian px-4">
+      {/* Grid background */}
       <div
         className="pointer-events-none absolute inset-0 opacity-[0.02]"
         style={{
@@ -39,47 +60,138 @@ export default function SignupPage() {
           backgroundSize: "40px 40px",
         }}
       />
+
+      {/* Logo */}
       <motion.div
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         className="mb-8"
       >
         <Link href="/" className="flex flex-col items-center gap-3">
-          <LogoPlaceholder />
-          <span className="font-mono text-sm font-semibold tracking-tight text-paper">
-            ML_SWARM
+          <span className="font-mono text-xl font-semibold">
+            <span className="text-azure">machine</span>
+            <span className="text-paper/60">(</span>
+            <span className="text-paper">learn</span>
+            <span className="text-paper/60">);</span>
           </span>
         </Link>
       </motion.div>
-      <motion.p
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.2 }}
-        className="mb-6 font-mono text-xs text-azure"
+
+      {/* Auth Container */}
+      <motion.div
+        initial={{ opacity: 0, scale: 0.98 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ duration: 0.4 }}
+        className="w-full max-w-md border border-white/10 bg-obsidian"
       >
-        Get started with $30 free monthly compute
-      </motion.p>
-      <AuthForm mode="signup" />
-      <motion.p
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.5 }}
-        className="mt-6 max-w-md text-center font-mono text-xs text-paper/30"
-      >
-        By proceeding, you agree to our{" "}
-        <Link href="/terms" className="text-paper/50 underline hover:text-paper">
-          terms of service
-        </Link>{" "}
-        and{" "}
-        <Link href="/privacy" className="text-paper/50 underline hover:text-paper">
-          privacy policy
-        </Link>
-        .
-      </motion.p>
+        {/* Terminal header */}
+        <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
+          <div className="h-2 w-2 bg-white/20" />
+          <div className="h-2 w-2 bg-white/20" />
+          <div className="h-2 w-2 bg-white/20" />
+          <span className="ml-4 font-mono text-xs text-paper/40">
+            auth/signup
+          </span>
+        </div>
+
+        <div className="p-8">
+          {/* Title */}
+          <h1 className="mb-2 font-sans text-3xl font-bold tracking-tight text-paper">
+            Create account
+          </h1>
+          <p className="mb-8 font-mono text-xs text-paper/50">
+            Get started with automated ML pipelines
+          </p>
+
+          {/* Signup Form */}
+          <form onSubmit={handleSignup} className="space-y-4">
+            <div>
+              <label className="mb-2 block font-mono text-xs uppercase tracking-widest text-paper/60">
+                Email
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                required
+                className="w-full border border-white/20 bg-transparent px-4 py-3 font-mono text-sm text-paper placeholder:text-paper/30 focus:border-azure focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block font-mono text-xs uppercase tracking-widest text-paper/60">
+                Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                minLength={6}
+                className="w-full border border-white/20 bg-transparent px-4 py-3 font-mono text-sm text-paper placeholder:text-paper/30 focus:border-azure focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block font-mono text-xs uppercase tracking-widest text-paper/60">
+                Confirm Password
+              </label>
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="••••••••"
+                required
+                minLength={6}
+                className="w-full border border-white/20 bg-transparent px-4 py-3 font-mono text-sm text-paper placeholder:text-paper/30 focus:border-azure focus:outline-none"
+              />
+            </div>
+
+            {message && (
+              <div
+                className={`border p-3 font-mono text-xs ${
+                  message.type === "success"
+                    ? "border-green-500/50 text-green-400"
+                    : "border-red-500/50 text-red-400"
+                }`}
+              >
+                {message.text}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="group relative w-full overflow-hidden border border-azure bg-azure px-4 py-3 font-mono text-xs uppercase tracking-widest text-obsidian transition-all hover:bg-azure/90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="h-3 w-3 animate-spin border border-obsidian border-t-transparent" />
+                  Creating account...
+                </span>
+              ) : (
+                "Create Account"
+              )}
+            </button>
+          </form>
+
+          {/* Login link */}
+          <p className="mt-6 text-center font-mono text-xs text-paper/50">
+            Already have an account?{" "}
+            <Link href="/login" className="text-azure hover:underline">
+              Sign in
+            </Link>
+          </p>
+        </div>
+      </motion.div>
+
+      {/* Back link */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
-        transition={{ delay: 0.6 }}
+        transition={{ delay: 0.5 }}
         className="mt-8"
       >
         <Link

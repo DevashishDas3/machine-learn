@@ -8,6 +8,9 @@ from config import SETTINGS
 
 app = modal.App(SETTINGS.modal_app_name)
 
+# Supabase secret for dashboard updates
+supabase_secret = modal.Secret.from_name("supabase-secrets")
+
 # Project root — must be on the image so remote containers can import config, agents, schemas, etc.
 # (pip_install alone does not ship local .py files; without this, workers raise ModuleNotFoundError.)
 _ROOT = Path(__file__).resolve().parent
@@ -34,6 +37,7 @@ def _project_image(
         "pandas",
         "scikit-learn",
         "python-dotenv",
+        "supabase",  # For dashboard updates
         *extra_pip,
     )
     if include_torch_cuda:
