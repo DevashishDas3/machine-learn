@@ -4,6 +4,7 @@ import asyncio
 import json
 import math
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from agents import (
@@ -141,6 +142,40 @@ def _render_code_with_best_hyperparameters(
 @app.function(
     image=base_image,
     volumes={"/vol": data_volume},
+    timeout=30,
+    retries=0,
+    max_containers=1,
+)
+def validate_dataset_inputs(
+    dataset_path: str, labels_path: str | None = None
+) -> Dict[str, Any]:
+    data_volume.reload()
+
+    dataset = Path(dataset_path)
+    dataset_exists = dataset.exists()
+
+    labels_exists = True
+    if labels_path:
+        labels_exists = Path(labels_path).exists()
+
+    nearby_files: List[str] = []
+    parent = dataset.parent
+    if parent.exists() and parent.is_dir():
+        nearby_files = sorted(p.name for p in parent.iterdir())[:25]
+
+    return {
+        "dataset_path": dataset_path,
+        "dataset_exists": dataset_exists,
+        "labels_path": labels_path,
+        "labels_exists": labels_exists,
+        "dataset_parent": str(parent),
+        "nearby_files": nearby_files,
+    }
+
+
+@app.function(
+    image=base_image,
+    volumes={"/vol": data_volume},
     timeout=120,
     retries=2,
     max_containers=1,
@@ -188,6 +223,37 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
         dashboard_hint="streamlit run dashboard.py",
         local_events_dir=str(ev.dir),
     )
+
+    dataset_validation = await validate_dataset_inputs.remote.aio(
+        dataset_path=run_cfg.dataset_path,
+        labels_path=run_cfg.labels_path,
+    )
+    ev.emit("dataset_validation", **dataset_validation)
+
+    dataset_missing = not bool(dataset_validation.get("dataset_exists"))
+    labels_missing = bool(run_cfg.labels_path) and not bool(
+        dataset_validation.get("labels_exists")
+    )
+    if dataset_missing or labels_missing:
+        missing_paths: List[str] = []
+        if dataset_missing:
+            missing_paths.append(run_cfg.dataset_path)
+        if labels_missing and run_cfg.labels_path:
+            missing_paths.append(run_cfg.labels_path)
+
+        nearby = dataset_validation.get("nearby_files", [])
+        nearby_hint = (
+            f" Nearby files under {dataset_validation.get('dataset_parent')}: {nearby}"
+            if nearby
+            else ""
+        )
+        raise FileNotFoundError(
+            "Dataset input path(s) not found in Modal volume: "
+            f"{missing_paths}. Upload files first with modal volume put "
+            f"{SETTINGS.modal_volume_name} <local_path> <remote_path>."
+            f"{nearby_hint}"
+        )
+
     llm = get_llm_server_handle()
     plan_agent = PlanAgent(llm)
     impl_agent = ImplementationAgent(llm)
@@ -195,7 +261,10 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
     report_agent = ReportAgent(llm)
 
     logger.info("running_plan_phase", extra={"extra_fields": {"run_id": run_id}})
-    approaches = await plan_agent.run(run_cfg)
+    approaches, plan_research_digest = await plan_agent.run(
+        run_cfg,
+        emit_hook=lambda event, payload: ev.emit(event, **payload),
+    )
     cost_estimate = CostEstimate.model_validate(
         plan_agent.estimate_cost(run_cfg, len(approaches))
     )
@@ -203,6 +272,7 @@ async def _run_pipeline(run_cfg: RunConfig) -> RunSummary:
         "plan_complete",
         approaches=[a.model_dump() for a in approaches],
         cost_estimate=cost_estimate.model_dump(),
+        plan_research_digest=plan_research_digest,
     )
 
     if cost_estimate.estimated_cost_usd > run_cfg.run_budget_usd:
