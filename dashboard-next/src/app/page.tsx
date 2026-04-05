@@ -3,23 +3,41 @@
 import Link from "next/link";
 import { motion } from "framer-motion";
 import Navbar from "@/components/Navbar";
-import NeuralCanvas from "@/components/NeuralCanvas";
 import TerminalWindow from "@/components/TerminalWindow";
-import ArchitectureDiagram from "@/components/ArchitectureDiagram";
+import BentoGrid from "@/components/BentoGrid";
+import PixelBlast from "@/components/PixelBlast";
 
 export default function LandingPage() {
   return (
     <main className="relative min-h-screen overflow-hidden bg-obsidian">
-      {/* Neural Network Background */}
-      <NeuralCanvas />
+      {/* PixelBlast Background - fixed position, z-0 */}
+      <div className="fixed inset-0 z-0">
+        <PixelBlast
+          variant="square"
+          pixelSize={4}
+          color="#0080fe"
+          patternScale={2}
+          patternDensity={1}
+          enableRipples
+          rippleSpeed={0.3}
+          rippleThickness={0.1}
+          rippleIntensityScale={1}
+          speed={0.5}
+          transparent
+          edgeFade={0.25}
+        />
+      </div>
 
-      {/* Navigation */}
-      <Navbar />
+      {/* Navigation - z-20 to be above everything */}
+      <div className="relative z-20">
+        <Navbar />
+      </div>
 
       {/* Hero Section */}
-      <section className="relative flex min-h-screen flex-col items-center justify-center px-6 pt-14">
-        {/* Gradient overlay for depth */}
+      <section className="relative z-10 flex min-h-screen flex-col items-center justify-start px-16 pb-20 pt-32">
+        {/* Gradient overlays for depth */}
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-obsidian via-transparent to-obsidian" />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-obsidian/50 via-transparent to-obsidian/50" />
 
         <motion.div
           initial={{ opacity: 0, y: 30 }}
@@ -27,29 +45,19 @@ export default function LandingPage() {
           transition={{ duration: 0.6 }}
           className="relative z-10 text-center"
         >
-          {/* Eyebrow text */}
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.2 }}
-            className="mb-4 font-mono text-xs uppercase tracking-[0.3em] text-azure"
-          >
-            Automated ML Pipelines on Modal GPUs
-          </motion.p>
-
-          {/* Main Headline */}
-          <h1 className="mb-6 font-sans text-5xl font-bold leading-none tracking-tight text-paper md:text-7xl lg:text-8xl">
-            <span className="font-mono text-azure">machine</span>
-            <span className="font-mono text-paper/60">(</span>
-            <span className="font-mono text-paper">learn</span>
-            <span className="font-mono text-paper/60">);</span>
+          {/* Main Headline - Massive Logo */}
+          <h1 className="mb-6 font-mono text-5xl font-bold leading-none tracking-tight text-paper md:text-7xl lg:text-8xl">
+            <span className="text-azure">machine</span>
+            <span className="text-paper/60">(</span>
+            <span className="text-paper">learn</span>
+            <span className="text-paper/60">);</span>
           </h1>
 
           {/* Subheadline */}
           <p className="mx-auto mb-10 max-w-2xl font-mono text-sm leading-relaxed text-paper/60 md:text-base">
-            Plan, implement, tune, and report — all automated. Orchestrate ML
-            pipelines with locally hosted LLMs on Modal GPUs. From idea to
-            production in one command.
+            Plan, implement, tune, and report — all automated.
+            <br className="hidden md:block" />
+            Orchestrate ML pipelines with locally hosted LLMs on Modal GPUs.
           </p>
 
           {/* CTA Buttons */}
@@ -61,25 +69,39 @@ export default function LandingPage() {
               <span className="relative z-10">Get Started</span>
             </Link>
             <Link
-              href="https://github.com"
-              className="group border border-white/20 px-8 py-3 font-mono text-sm uppercase tracking-widest text-paper transition-all hover:border-paper hover:bg-paper/5"
+              href="https://github.com/DevashishDas3/machine-learn"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group flex items-center gap-2 border border-white/20 px-8 py-3 font-mono text-sm uppercase tracking-widest text-paper transition-all hover:border-paper hover:bg-paper/5"
             >
-              View Source
+              <svg
+                className="h-4 w-4"
+                fill="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"
+                  clipRule="evenodd"
+                />
+              </svg>
+              <span>View Source</span>
             </Link>
           </div>
         </motion.div>
 
         {/* Terminal Window */}
-        <div className="relative z-10 mt-16 w-full max-w-4xl px-4">
+        <div className="relative z-10 mt-12 w-full max-w-3xl px-4">
           <TerminalWindow />
         </div>
 
-        {/* Scroll indicator */}
+        {/* Scroll indicator - positioned relative, not absolute */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 1.5 }}
-          className="absolute bottom-8 left-1/2 -translate-x-1/2"
+          className="z-10 mt-8"
         >
           <div className="flex flex-col items-center gap-2">
             <span className="font-mono text-xs uppercase tracking-widest text-paper/30">
@@ -94,102 +116,26 @@ export default function LandingPage() {
         </motion.div>
       </section>
 
-      {/* Architecture Diagram Section */}
-      <section className="relative z-10 border-t border-white/10 bg-obsidian py-24">
-        <div className="mx-auto max-w-7xl px-6">
-          <motion.div
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-            className="mb-12 text-center"
-          >
-            <p className="mb-2 font-mono text-xs uppercase tracking-[0.3em] text-azure">
-              System Architecture
-            </p>
-            <h2 className="font-sans text-3xl font-bold tracking-tight text-paper md:text-4xl">
-              How{" "}
-              <span className="font-mono text-azure">machine</span>
-              <span className="font-mono text-paper/60">(</span>
-              <span className="font-mono text-paper">learn</span>
-              <span className="font-mono text-paper/60">);</span>
-              {" "}works
-            </h2>
-          </motion.div>
-
-          <ArchitectureDiagram />
-        </div>
-      </section>
-
-      {/* Features Grid Section */}
-      <section className="relative z-10 border-t border-white/10 bg-obsidian py-24">
-        <div className="mx-auto max-w-7xl px-6">
-          <motion.h2
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true }}
-            className="mb-16 text-center font-sans text-3xl font-bold tracking-tight text-paper md:text-4xl"
-          >
-            Built for{" "}
-            <span className="text-azure">ML engineers</span>
-          </motion.h2>
-
-          <div className="grid gap-[1px] bg-white/10 md:grid-cols-3">
-            {[
-              {
-                title: "GPU Orchestration",
-                desc: "A100, H100, L4 — scale GPU workloads instantly with Modal's serverless infrastructure.",
-                code: "@app.cls(gpu=\"A100\")",
-              },
-              {
-                title: "vLLM Integration",
-                desc: "Deploy LLMs with optimized inference. PagedAttention, continuous batching, built-in.",
-                code: "engine = vllm.AsyncEngine()",
-              },
-              {
-                title: "Agent Coordination",
-                desc: "asyncio.gather() your agents. Parallel execution, automatic retries, observable.",
-                code: "await asyncio.gather(*agents)",
-              },
-            ].map((feature, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, y: 20 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.1 }}
-                className="bg-obsidian p-8"
-              >
-                <code className="mb-4 block font-mono text-xs text-azure">
-                  {feature.code}
-                </code>
-                <h3 className="mb-2 font-sans text-xl font-semibold text-paper">
-                  {feature.title}
-                </h3>
-                <p className="font-mono text-sm leading-relaxed text-paper/50">
-                  {feature.desc}
-                </p>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
+      {/* Who It's For - Bento Box */}
+      <div className="relative z-10">
+        <BentoGrid />
+      </div>
 
       {/* Footer */}
-      <footer className="border-t border-white/10 bg-obsidian py-8">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6">
+      <footer className="relative z-10 border-t border-white/10 bg-obsidian py-8">
+        <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-6 md:flex-row">
           <span className="font-mono text-xs text-paper/40">
             © 2026 machine(learn);
           </span>
           <div className="flex gap-6">
-            {["GitHub", "Discord", "Twitter"].map((link) => (
-              <a
-                key={link}
-                href="#"
-                className="font-mono text-xs uppercase tracking-widest text-paper/40 transition-colors hover:text-paper"
-              >
-                {link}
-              </a>
-            ))}
+            <a
+              href="https://github.com/DevashishDas3/machine-learn"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-mono text-xs uppercase tracking-widest text-paper/40 transition-colors hover:text-paper"
+            >
+              GitHub
+            </a>
           </div>
         </div>
       </footer>

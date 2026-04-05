@@ -53,6 +53,22 @@ def _project_image(
 
 base_image = _project_image()
 
+# API image with FastAPI - pip_install before add_local_dir
+api_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "pydantic>=2",
+        "numpy",
+        "pandas",
+        "scikit-learn",
+        "python-dotenv",
+        "supabase",
+        "fastapi",
+        "python-multipart",
+    )
+    .add_local_dir(_ROOT, remote_path="/root", copy=False, ignore=_ignore_dev_artifacts)
+)
+
 train_image = _project_image(
     include_torch_cuda=True,
     extra_env={"PYTHONPATH": "/root"},
