@@ -38,6 +38,7 @@ def _project_image(
         "pandas",
         "pyarrow",
         "scikit-learn",
+        "imbalanced-learn",
         "python-dotenv",
         "supabase",  # For dashboard updates
         *extra_pip,

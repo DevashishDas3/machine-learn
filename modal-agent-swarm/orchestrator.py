@@ -141,6 +141,28 @@ def _render_code_with_best_hyperparameters(
     return header + rendered
 
 
+def _summarize_dataset_metadata(metadata: DatasetMetadata) -> str:
+    lines: List[str] = []
+    lines.append(f"task_type_hint={metadata.task_type_hint or 'unknown'}")
+    lines.append(f"suggested_label_column={metadata.suggested_label_column or 'none'}")
+    lines.append(
+        f"num_samples={metadata.num_samples if metadata.num_samples is not None else 'unknown'}"
+    )
+    lines.append(f"files_detected={len(metadata.files)}")
+    if metadata.files:
+        preview = metadata.files[:5]
+        file_rows = [
+            f"{f.path} (format={f.format}, rows={f.num_rows if f.num_rows is not None else 'n/a'})"
+            for f in preview
+        ]
+        if len(metadata.files) > len(preview):
+            file_rows.append(f"... ({len(metadata.files) - len(preview)} more files)")
+        lines.append("files:\n- " + "\n- ".join(file_rows))
+    if metadata.file_tree:
+        lines.append("file_tree:\n" + metadata.file_tree[:4000])
+    return "\n".join(lines)
+
+
 @app.function(
     image=base_image,
     volumes={"/vol": data_volume},
@@ -280,6 +302,9 @@ async def _run_pipeline(
                 },
             )
 
+    # Ensure this container sees the latest dataset writes from the volume.
+    data_volume.reload()
+
     llm = get_llm_server_handle()
     dash_stage("load_modal", "complete")
     dash_msg("agent", "LLM server ready", "load_modal")
@@ -293,11 +318,50 @@ async def _run_pipeline(
     dash_msg(
         "agent", "Exploring uploaded dataset and inferring schema...", "explorer_agent"
     )
-    dataset_metadata: DatasetMetadata = await explorer_agent.run(
-        run_cfg.dataset_base_path,
-        run_cfg.task_description,
-    )
+    dataset_metadata: DatasetMetadata | None = None
+    last_explorer_error: Exception | None = None
+    max_explorer_attempts = 6
+    for attempt in range(1, max_explorer_attempts + 1):
+        try:
+            data_volume.reload()
+            dataset_metadata = await explorer_agent.run(
+                run_cfg.dataset_base_path,
+                run_cfg.task_description,
+            )
+            break
+        except ValueError as exc:
+            last_explorer_error = exc
+            if "Dataset directory not found" not in str(exc):
+                raise
+            dash_msg(
+                "system",
+                f"Explorer could not see dataset path yet (attempt {attempt}/{max_explorer_attempts}). Retrying... Error: {_snip(str(exc), 900)}",
+                "explorer_agent",
+            )
+            if attempt < max_explorer_attempts:
+                await asyncio.sleep(1.0)
+        except Exception as exc:  # noqa: BLE001
+            last_explorer_error = exc
+            if attempt < max_explorer_attempts:
+                dash_msg(
+                    "system",
+                    f"Explorer transient error (attempt {attempt}/{max_explorer_attempts}). Retrying... Error: {_snip(str(exc), 900)}",
+                    "explorer_agent",
+                )
+                await asyncio.sleep(1.0)
+            else:
+                raise
+
+    if dataset_metadata is None:
+        raise ValueError(
+            f"Explorer failed after {max_explorer_attempts} attempts: {last_explorer_error}"
+        )
     ev.emit("explorer_complete", dataset_metadata=dataset_metadata.model_dump())
+    dash_msg(
+        "agent",
+        "Explorer output:\n" + _summarize_dataset_metadata(dataset_metadata),
+        "explorer_agent",
+    )
     dash_msg(
         "agent",
         f"Explorer complete. Task hint: {dataset_metadata.task_type_hint or 'unknown'}, label: {dataset_metadata.suggested_label_column or 'none'}",
@@ -381,7 +445,12 @@ async def _run_pipeline(
                 dataset_metadata=dataset_metadata,
                 task_description=run_cfg.task_description,
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            dash_msg(
+                "system",
+                f"Code generation failed for {approach.name}; using fallback code. Error: {_snip(str(exc), 900)}",
+                "implement_agent",
+            )
             code = FALLBACK_TRAIN_CODE
         ev.emit(
             "code_generated",
@@ -417,6 +486,11 @@ async def _run_pipeline(
 
             for fix_i in range(max_fix):
                 if fix_i == 0:
+                    dash_msg(
+                        "agent",
+                        f"Running {approach.name} ({phase}) attempt {fix_i + 1}/{max_fix}",
+                        "implement_agent",
+                    )
                     ev.emit(
                         "training_started",
                         approach=approach.name,
@@ -425,6 +499,11 @@ async def _run_pipeline(
                         hyperparameters=hp_override,
                     )
                 else:
+                    dash_msg(
+                        "agent",
+                        f"Retrying {approach.name} ({phase}) attempt {fix_i + 1}/{max_fix}; previous error: {_snip(last_result.error or '', 700) if last_result else 'unknown'}",
+                        "implement_agent",
+                    )
                     ev.emit(
                         "training_fix_retry",
                         approach=approach.name,
@@ -450,6 +529,11 @@ async def _run_pipeline(
                     last_result = TrainingResult.model_validate(result_payload)
                 except Exception as exc:  # noqa: BLE001
                     last_result = _build_error_result(approach.name, str(exc))
+                    dash_msg(
+                        "system",
+                        f"Execution exception for {approach.name} ({phase}) attempt {fix_i + 1}/{max_fix}: {_snip(str(exc), 900)}",
+                        "implement_agent",
+                    )
 
                 ev.emit(
                     "train_result",
@@ -466,12 +550,33 @@ async def _run_pipeline(
                 )
 
                 if not last_result.error:
+                    dash_msg(
+                        "agent",
+                        f"{approach.name} ({phase}) succeeded on attempt {fix_i + 1}/{max_fix}.",
+                        "implement_agent",
+                    )
                     generated_code_by_name[approach.name] = code
                     return last_result
 
                 failure_history.append(last_result.error or "unknown training error")
+                dash_msg(
+                    "system",
+                    f"{approach.name} ({phase}) failed on attempt {fix_i + 1}/{max_fix}: {_snip(last_result.error or 'unknown error', 900)}",
+                    "implement_agent",
+                )
+                if last_result.logs_excerpt:
+                    dash_msg(
+                        "agent",
+                        f"Logs excerpt for {approach.name} attempt {fix_i + 1}: {_snip(last_result.logs_excerpt, 900)}",
+                        "implement_agent",
+                    )
 
                 if fix_i >= max_fix - 1:
+                    dash_msg(
+                        "system",
+                        f"No attempts left for {approach.name} ({phase}); keeping latest failed result.",
+                        "implement_agent",
+                    )
                     generated_code_by_name[approach.name] = code
                     return last_result
 
@@ -487,9 +592,19 @@ async def _run_pipeline(
                         logs_excerpt=last_result.logs_excerpt,
                         failure_history=failure_history,
                     )
+                    dash_msg(
+                        "agent",
+                        f"Generated repaired code for {approach.name} ({phase}) after attempt {fix_i + 1} failure.",
+                        "implement_agent",
+                    )
                     generated_code_by_name[approach.name] = code
                 except Exception as exc:  # noqa: BLE001
                     ev.emit("train_fix_failed", approach=approach.name, error=str(exc))
+                    dash_msg(
+                        "system",
+                        f"Repair step failed for {approach.name} ({phase}): {_snip(str(exc), 900)}",
+                        "implement_agent",
+                    )
                     return last_result
 
             return (
@@ -860,6 +975,15 @@ def run_pipeline_job(
     run_cfg_payload: Dict[str, Any], swarm_run_id: str | None = None
 ) -> Dict[str, Any]:
     configure_logging()
+    data_volume.reload()
     run_cfg = RunConfig.model_validate(run_cfg_payload)
+    # Guard against eventual consistency delays in volume visibility.
+    validation = validate_dataset_inputs.remote(run_cfg.dataset_base_path)
+    if not validation.get("dataset_exists"):
+        nearby = validation.get("nearby_files", [])
+        raise ValueError(
+            "Dataset directory not found before pipeline start: "
+            f"{run_cfg.dataset_base_path}; nearby_files={nearby}"
+        )
     summary = asyncio.run(_run_pipeline(run_cfg, swarm_run_id=swarm_run_id))
     return json.loads(summary.model_dump_json())

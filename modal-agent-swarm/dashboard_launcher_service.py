@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 import zipfile
@@ -36,6 +37,39 @@ async def _spawn_orchestrator_run(
         environment_name=modal_env,
     )
     await deployed_fn.spawn.aio(run_cfg.model_dump(), swarm_run_id)
+
+
+async def _wait_for_dataset_visibility(
+    *,
+    dataset_base_path: str,
+    modal_env: str,
+    max_attempts: int = 8,
+    delay_seconds: float = 1.0,
+) -> None:
+    validate_fn = modal.Function.from_name(
+        SETTINGS.modal_app_name,
+        "validate_dataset_inputs",
+        environment_name=modal_env,
+    )
+
+    last_payload: dict[str, object] | None = None
+    for attempt in range(1, max_attempts + 1):
+        payload = await validate_fn.remote.aio(dataset_base_path)
+        last_payload = payload
+        if bool(payload.get("dataset_exists")):
+            return
+        if attempt < max_attempts:
+            await asyncio.sleep(delay_seconds)
+
+    nearby = []
+    if isinstance(last_payload, dict):
+        raw_nearby = last_payload.get("nearby_files")
+        if isinstance(raw_nearby, list):
+            nearby = [str(x) for x in raw_nearby[:15]]
+    hint = f" nearby={nearby}" if nearby else ""
+    raise ValueError(
+        f"Dataset directory not found after upload: {dataset_base_path}.{hint}"
+    )
 
 
 def _iter_files(root: Path) -> list[Path]:
@@ -147,6 +181,29 @@ def create_app() -> FastAPI:
             swarm_run_id,
             "agent",
             f"Upload complete. Dataset extracted to /vol{remote_base}",
+            "load_modal",
+        )
+        add_chat_message(
+            swarm_run_id,
+            "agent",
+            "Verifying dataset visibility in Modal volume...",
+            "load_modal",
+        )
+
+        try:
+            await _wait_for_dataset_visibility(
+                dataset_base_path=f"/vol{remote_base}",
+                modal_env=modal_env,
+            )
+        except Exception as exc:  # noqa: BLE001
+            details = str(exc).strip()
+            fail_run(swarm_run_id, details[:3000], "load_modal")
+            raise HTTPException(status_code=500, detail=details[:3000]) from exc
+
+        add_chat_message(
+            swarm_run_id,
+            "agent",
+            "Dataset verified in Modal volume.",
             "load_modal",
         )
         add_chat_message(

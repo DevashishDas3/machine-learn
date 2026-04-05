@@ -29,6 +29,39 @@ def _fingerprint(code: str) -> str:
     return sha1(code.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
+def _build_runtime_repair_hints(runtime_error: str) -> str:
+    err = (runtime_error or "").lower()
+    hints: List[str] = []
+
+    if "could not convert string to float" in err:
+        hints.append(
+            "Detected numeric conversion failure from string features. "
+            "For sklearn tabular models, preprocess mixed types with a ColumnTransformer "
+            "(OneHotEncoder for object/category columns, passthrough or scaling for numeric columns)."
+        )
+    if "invalid literal for int()" in err:
+        hints.append(
+            "Detected label/int casting failure. Do not cast labels with int(...). "
+            "If y is non-numeric strings (e.g., Yes/No), use LabelEncoder on y before fitting classifiers."
+        )
+    if "local variable 'pd'" in err or 'local variable "pd"' in err:
+        hints.append(
+            "Detected missing pandas symbol. If pandas is used anywhere, include `import pandas as pd` at the top-level imports."
+        )
+    if (
+        "cannot import name 'columntransformer'" in err
+        or 'cannot import name "columntransformer"' in err
+    ):
+        hints.append(
+            "Detected wrong ColumnTransformer import path. Use `from sklearn.compose import ColumnTransformer` "
+            "(NOT from sklearn.preprocessing)."
+        )
+
+    if not hints:
+        return ""
+    return "\n".join(f"- {h}" for h in hints)
+
+
 def _select_dataset_hints(
     dataset_metadata: Dict[str, Any] | None,
 ) -> tuple[str | None, list[str], str | None]:
@@ -256,6 +289,11 @@ class ImplementationAgent:
             "- If building a DataFrame from X and schema, only do so when len(schema) == X.shape[1].\n"
             "- If prior fixes repeated the same failure, choose a substantially different fix strategy.\n"
         )
+        targeted_hints = _build_runtime_repair_hints(runtime_error)
+        if targeted_hints:
+            fix_intro += (
+                "\nTargeted hints from observed error:\n" + targeted_hints + "\n"
+            )
         fix_intro += f"\nFailed code to correct:\n\n{failed_code}\n"
 
         last_code = failed_code

@@ -46,6 +46,7 @@ Data loading requirements:
 Imports — CRITICAL RULES:
 - Every name you use must be imported. NEVER use a name that is not explicitly imported at the top.
 - For sklearn: import numpy as np, then import the specific sklearn classes you use. Do NOT import joblib.
+- If you choose to use imbalanced-learn, import from imblearn only when necessary and keep fallback behavior if unavailable.
 - For pytorch: the first lines of your file must be:
     import torch
     import torch.nn as nn
@@ -97,12 +98,22 @@ For framework "sklearn":
 - Convert features to float32 when appropriate.
 - Ensure labels are int64 / compatible with sklearn classifiers for classification.
 - Do NOT save checkpoints — return model_checkpoint_path as an empty string "".
+- For mixed-type tabular data (strings + numeric), use a preprocessing pipeline:
+  - import path is CRITICAL: `from sklearn.compose import ColumnTransformer`
+  - detect categorical columns from pandas DataFrame dtypes,
+  - apply OneHotEncoder(handle_unknown="ignore") to categorical columns,
+  - passthrough numeric columns,
+  - fit estimator on transformed features.
+- NEVER do raw `X.astype(float)` on mixed tabular data.
+- If y contains strings like Yes/No or Pass/Fail, encode labels with LabelEncoder before model fit.
+- Never use int("No") / int("Yes") style conversions.
 - For tabular data, a safe baseline path is:
   1) convert X/y to numpy,
   2) train_test_split,
   3) fit model,
   4) compute accuracy,
   5) return metrics.
+- If oversampling packages are unavailable, proceed without oversampling instead of failing.
 - When constructing sklearn models, ONLY pass the parameters that model's __init__ accepts.
   Example for LogisticRegression:
     solver = str(hyper.get("solver", "lbfgs"))

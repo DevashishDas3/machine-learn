@@ -19,6 +19,8 @@ Speed constraints (IMPORTANT — all training runs must complete within 90 secon
 - ALWAYS include "max_train_samples": 10000 in every approach's hyperparameters.
   The generated code will subsample the dataset to this many samples before training.
   This is the primary mechanism for keeping runs fast.
+- Do NOT propose approaches that require packages outside the runtime image unless absolutely necessary.
+- Specifically avoid SMOTE/ADASYN/imblearn-dependent approaches by default.
 
 Hyperparameter keys — CRITICAL RULES:
 - Use ONLY valid Python identifiers that exactly match the model's __init__ parameter names.
