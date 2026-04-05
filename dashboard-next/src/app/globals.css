@@ -31,3 +31,8 @@
   outline: 1px solid #0080FE;
   outline-offset: 2px;
 }
+
+/* Text glow effect for active terminal line */
+.text-glow {
+  text-shadow: 0 0 8px rgba(0, 128, 254, 0.6), 0 0 16px rgba(0, 128, 254, 0.4);
+}

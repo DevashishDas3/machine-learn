@@ -1,78 +1,215 @@
 "use client";
 
-import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+
+interface TerminalLine {
+  id: number;
+  prefix: string;
+  prefixColor: string;
+  content: string;
+  delay: number;
+}
+
+const terminalSequence: TerminalLine[] = [
+  { 
+    id: 1, 
+    prefix: "> User:", 
+    prefixColor: "text-paper", 
+    content: "Train a classifier on MNIST with >98% accuracy.", 
+    delay: 0 
+  },
+  { 
+    id: 2, 
+    prefix: "[System]:", 
+    prefixColor: "text-[#27CA40]", 
+    content: "Booting Modal A100 Cluster...", 
+    delay: 1500 
+  },
+  { 
+    id: 3, 
+    prefix: "[PlanAgent]:", 
+    prefixColor: "text-azure", 
+    content: "Generating 3 candidate approaches...", 
+    delay: 3000 
+  },
+  { 
+    id: 4, 
+    prefix: "[PlanAgent]:", 
+    prefixColor: "text-azure", 
+    content: "├─ CNN with BatchNorm + Dropout", 
+    delay: 4000 
+  },
+  { 
+    id: 5, 
+    prefix: "[PlanAgent]:", 
+    prefixColor: "text-azure", 
+    content: "├─ ResNet-18 (pretrained, fine-tuned)", 
+    delay: 4500 
+  },
+  { 
+    id: 6, 
+    prefix: "[PlanAgent]:", 
+    prefixColor: "text-azure", 
+    content: "└─ Simple MLP baseline", 
+    delay: 5000 
+  },
+  { 
+    id: 7, 
+    prefix: "[ImplementationAgent]:", 
+    prefixColor: "text-[#FF79C6]", 
+    content: "Compiling PyTorch architectures...", 
+    delay: 6000 
+  },
+  { 
+    id: 8, 
+    prefix: "[TuningAgent]:", 
+    prefixColor: "text-[#F1FA8C]", 
+    content: "Running hyperparameter sweep (lr, batch_size, epochs)...", 
+    delay: 7500 
+  },
+  { 
+    id: 9, 
+    prefix: "[TuningAgent]:", 
+    prefixColor: "text-[#F1FA8C]", 
+    content: "Best config found: lr=0.001, batch_size=128", 
+    delay: 9000 
+  },
+  { 
+    id: 10, 
+    prefix: "[ReportAgent]:", 
+    prefixColor: "text-[#8BE9FD]", 
+    content: "✓ Final accuracy: 98.7% — Report generated.", 
+    delay: 10500 
+  },
+];
+
+function TypewriterText({ text, onComplete }: { text: string; onComplete?: () => void }) {
+  const [displayedText, setDisplayedText] = useState("");
+  const [isComplete, setIsComplete] = useState(false);
+
+  useEffect(() => {
+    let index = 0;
+    const interval = setInterval(() => {
+      if (index < text.length) {
+        setDisplayedText(text.slice(0, index + 1));
+        index++;
+      } else {
+        clearInterval(interval);
+        setIsComplete(true);
+        onComplete?.();
+      }
+    }, 25);
+
+    return () => clearInterval(interval);
+  }, [text, onComplete]);
+
+  return (
+    <span>
+      {displayedText}
+      {!isComplete && <span className="animate-pulse text-azure">▌</span>}
+    </span>
+  );
+}
 
 export default function TerminalWindow() {
-  const codeLines = [
-    { num: "01", content: "import modal", color: "text-azure" },
-    { num: "02", content: "import asyncio", color: "text-azure" },
-    { num: "03", content: "from agents import InferenceAgent, TrainingAgent", color: "text-paper/70" },
-    { num: "04", content: "", color: "" },
-    { num: "05", content: "app = modal.App(\"ml-swarm\")", color: "text-paper/70" },
-    { num: "06", content: "", color: "" },
-    { num: "07", content: "@app.cls(gpu=\"A100\", timeout=3600)", color: "text-[#FF79C6]" },
-    { num: "08", content: "class SwarmOrchestrator:", color: "text-[#8BE9FD]" },
-    { num: "09", content: "    @modal.method()", color: "text-[#FF79C6]" },
-    { num: "10", content: "    async def run_swarm(self, tasks: list):", color: "text-[#50FA7B]" },
-    { num: "11", content: "        agents = [", color: "text-paper/70" },
-    { num: "12", content: "            InferenceAgent(model=\"llama-3-70b\"),", color: "text-[#F1FA8C]" },
-    { num: "13", content: "            TrainingAgent(config=self.config),", color: "text-[#F1FA8C]" },
-    { num: "14", content: "        ]", color: "text-paper/70" },
-    { num: "15", content: "", color: "" },
-    { num: "16", content: "        results = await asyncio.gather(", color: "text-azure" },
-    { num: "17", content: "            *[agent.execute(task)", color: "text-paper/70" },
-    { num: "18", content: "              for agent, task in zip(agents, tasks)]", color: "text-paper/70" },
-    { num: "19", content: "        )", color: "text-paper/70" },
-    { num: "20", content: "        return results", color: "text-azure" },
-  ];
+  const [visibleLines, setVisibleLines] = useState<number[]>([]);
+  const [currentTyping, setCurrentTyping] = useState<number | null>(null);
+  const [completedLines, setCompletedLines] = useState<number[]>([]);
+
+  useEffect(() => {
+    // Start the sequence
+    terminalSequence.forEach((line) => {
+      setTimeout(() => {
+        setVisibleLines((prev) => [...prev, line.id]);
+        setCurrentTyping(line.id);
+      }, line.delay);
+    });
+
+    // Restart the animation loop
+    const totalDuration = terminalSequence[terminalSequence.length - 1].delay + 4000;
+    const resetInterval = setInterval(() => {
+      setVisibleLines([]);
+      setCurrentTyping(null);
+      setCompletedLines([]);
+      
+      terminalSequence.forEach((line) => {
+        setTimeout(() => {
+          setVisibleLines((prev) => [...prev, line.id]);
+          setCurrentTyping(line.id);
+        }, line.delay);
+      });
+    }, totalDuration);
+
+    return () => clearInterval(resetInterval);
+  }, []);
+
+  const handleLineComplete = (lineId: number) => {
+    setCompletedLines((prev) => [...prev, lineId]);
+  };
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 40 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.6, delay: 0.3 }}
-      className="w-full max-w-3xl border border-white/10 bg-[#0D1117]"
+      className="w-full border border-white/10 bg-[#0A0E12]"
     >
       {/* Terminal Header */}
       <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
-        <div className="h-3 w-3 rounded-none bg-[#FF5F56]" />
-        <div className="h-3 w-3 rounded-none bg-[#FFBD2E]" />
-        <div className="h-3 w-3 rounded-none bg-[#27CA40]" />
+        <div className="h-2.5 w-2.5 rounded-none bg-[#FF5F56]" />
+        <div className="h-2.5 w-2.5 rounded-none bg-[#FFBD2E]" />
+        <div className="h-2.5 w-2.5 rounded-none bg-[#27CA40]" />
         <span className="ml-4 font-mono text-xs text-paper/40">
-          swarm_orchestrator.py
+          machine(learn); — pipeline session
         </span>
       </div>
 
-      {/* Code Content */}
-      <div className="overflow-x-auto p-4">
-        <pre className="font-mono text-sm leading-relaxed">
-          {codeLines.map((line, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.3, delay: i * 0.03 }}
-              className="flex"
-            >
-              <span className="mr-4 w-6 select-none text-right text-paper/30">
-                {line.num}
-              </span>
-              <span className={line.color || "text-paper/70"}>
-                {line.content || " "}
-              </span>
-            </motion.div>
-          ))}
-        </pre>
+      {/* Terminal Content */}
+      <div className="min-h-[280px] overflow-hidden p-4 md:p-6">
+        <div className="font-mono text-sm leading-loose">
+          <AnimatePresence>
+            {terminalSequence
+              .filter((line) => visibleLines.includes(line.id))
+              .map((line) => {
+                const isActive = currentTyping === line.id && !completedLines.includes(line.id);
+                const isCompleted = completedLines.includes(line.id);
+
+                return (
+                  <motion.div
+                    key={line.id}
+                    initial={{ opacity: 0, x: -10 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className={`flex flex-wrap items-start gap-2 py-0.5 ${
+                      isActive ? "bg-azure/5 -mx-2 px-2" : ""
+                    }`}
+                  >
+                    <span className={`${line.prefixColor} shrink-0 font-semibold`}>
+                      {line.prefix}
+                    </span>
+                    <span className={`text-paper/80 ${isActive ? "text-glow" : ""}`}>
+                      {isCompleted || !isActive ? (
+                        line.content
+                      ) : (
+                        <TypewriterText 
+                          text={line.content} 
+                          onComplete={() => handleLineComplete(line.id)} 
+                        />
+                      )}
+                    </span>
+                  </motion.div>
+                );
+              })}
+          </AnimatePresence>
+        </div>
       </div>
 
       {/* Terminal Footer */}
-      <div className="border-t border-white/10 px-4 py-2">
+      <div className="border-t border-white/10 px-4 py-2 md:px-6">
         <div className="flex items-center gap-2">
-          <span className="text-[#27CA40]">▸</span>
-          <span className="font-mono text-xs text-paper/50">
-            modal deploy swarm_orchestrator.py
-          </span>
-          <span className="animate-pulse text-azure">█</span>
+          <span className="text-azure">❯</span>
+          <span className="animate-pulse font-mono text-sm text-paper/30">_</span>
         </div>
       </div>
     </motion.div>

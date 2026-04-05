@@ -23,6 +23,9 @@ const config: Config = {
           "100%": { boxShadow: "0 0 10px #0080FE, 0 0 20px #0080FE, 0 0 30px #0080FE" },
         },
       },
+      backgroundImage: {
+        "gradient-radial": "radial-gradient(var(--tw-gradient-stops))",
+      },
     },
   },
   plugins: [],
