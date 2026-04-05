@@ -2,28 +2,39 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import dynamic from "next/dynamic";
 import Navbar from "@/components/Navbar";
 import TerminalWindow from "@/components/TerminalWindow";
 import BentoGrid from "@/components/BentoGrid";
-
-// Dynamic import for Three.js component to avoid SSR issues
-const SwarmPipelineCanvas = dynamic(
-  () => import("@/components/SwarmPipelineCanvas"),
-  { ssr: false }
-);
+import PixelBlast from "@/components/PixelBlast";
 
 export default function LandingPage() {
   return (
     <main className="relative min-h-screen overflow-hidden bg-obsidian">
-      {/* Navigation */}
-      <Navbar />
+      {/* PixelBlast Background - fixed position, z-0 */}
+      <div className="fixed inset-0 z-0">
+        <PixelBlast
+          variant="square"
+          pixelSize={4}
+          color="#0080fe"
+          patternScale={2}
+          patternDensity={1}
+          enableRipples
+          rippleSpeed={0.3}
+          rippleThickness={0.1}
+          rippleIntensityScale={1}
+          speed={0.5}
+          transparent
+          edgeFade={0.25}
+        />
+      </div>
+
+      {/* Navigation - z-20 to be above everything */}
+      <div className="relative z-20">
+        <Navbar />
+      </div>
 
       {/* Hero Section */}
-      <section className="relative flex min-h-screen flex-col items-center justify-center px-6 pt-40">
-        {/* Three.js Pipeline Background */}
-        <SwarmPipelineCanvas />
-
+      <section className="relative z-10 flex min-h-screen flex-col items-center justify-center px-16 pt-20">
         {/* Gradient overlays for depth */}
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-obsidian via-transparent to-obsidian" />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-obsidian/50 via-transparent to-obsidian/50" />
@@ -35,7 +46,7 @@ export default function LandingPage() {
           className="relative z-10 text-center"
         >
           {/* Main Headline - Massive Logo */}
-          <h1 className="mb-6= font-mono text-5xl font-bold leading-none tracking-tight text-paper md:text-7xl lg:text-8xl">
+          <h1 className="mb-6 font-mono text-5xl font-bold leading-none tracking-tight text-paper md:text-7xl lg:text-8xl">
             <span className="text-azure">machine</span>
             <span className="text-paper/60">(</span>
             <span className="text-paper">learn</span>
@@ -90,7 +101,7 @@ export default function LandingPage() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 1.5 }}
-          className="absolute bottom-8 left-1/2 -translate-x-1/2"
+          className="absolute bottom-8 left-1/2 z-10 -translate-x-1/2"
         >
           <div className="flex flex-col items-center gap-2">
             <span className="font-mono text-xs uppercase tracking-widest text-paper/30">
@@ -106,10 +117,12 @@ export default function LandingPage() {
       </section>
 
       {/* Who It's For - Bento Box */}
-      <BentoGrid />
+      <div className="relative z-10">
+        <BentoGrid />
+      </div>
 
       {/* Footer */}
-      <footer className="border-t border-white/10 bg-obsidian py-8">
+      <footer className="relative z-10 border-t border-white/10 bg-obsidian py-8">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-6 md:flex-row">
           <span className="font-mono text-xs text-paper/40">
             © 2026 machine(learn);

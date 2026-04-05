@@ -17,7 +17,8 @@
     "@supabase/ssr": "^0.5.0",
     "@react-three/fiber": "^8.15.0",
     "@react-three/drei": "^9.88.0",
-    "three": "^0.160.0"
+    "three": "^0.170.0",
+    "postprocessing": "^6.36.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
