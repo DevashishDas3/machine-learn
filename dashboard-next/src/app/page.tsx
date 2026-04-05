@@ -34,7 +34,7 @@ export default function LandingPage() {
       </div>
 
       {/* Hero Section */}
-      <section className="relative z-10 flex min-h-screen flex-col items-center justify-center px-16 pt-20">
+      <section className="relative z-10 flex min-h-screen flex-col items-center justify-start px-16 pb-20 pt-32">
         {/* Gradient overlays for depth */}
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-obsidian via-transparent to-obsidian" />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-obsidian/50 via-transparent to-obsidian/50" />
@@ -92,16 +92,16 @@ export default function LandingPage() {
         </motion.div>
 
         {/* Terminal Window */}
-        <div className="relative z-10 mt-16 w-full max-w-3xl px-4">
+        <div className="relative z-10 mt-12 w-full max-w-3xl px-4">
           <TerminalWindow />
         </div>
 
-        {/* Scroll indicator */}
+        {/* Scroll indicator - positioned relative, not absolute */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 1.5 }}
-          className="absolute bottom-8 left-1/2 z-10 -translate-x-1/2"
+          className="z-10 mt-8"
         >
           <div className="flex flex-col items-center gap-2">
             <span className="font-mono text-xs uppercase tracking-widest text-paper/30">
