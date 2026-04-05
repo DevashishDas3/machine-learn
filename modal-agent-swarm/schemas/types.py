@@ -98,7 +98,7 @@ class RunConfig(BaseModel):
     labels_path: Optional[str] = None
     max_approaches: int = 5
     max_tuning_iterations: int = 3
-    max_parallel_agents: int = 4
+    max_parallel_agents: int = 5
     max_train_fix_attempts: int = 3
     primary_metric: str = "accuracy"
     maximize_metric: bool = True

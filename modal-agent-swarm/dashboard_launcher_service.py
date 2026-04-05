@@ -11,7 +11,12 @@ from pydantic import BaseModel
 
 from config import SETTINGS
 from schemas import RunConfig
-from supabase_helpers import add_chat_message, create_run, fail_run
+from supabase_helpers import (
+    add_chat_message,
+    create_run,
+    fail_run,
+    update_flowchart_stage,
+)
 
 
 def _safe_filename(name: str) -> str:
@@ -90,10 +95,18 @@ def create_app() -> FastAPI:
                 "task_description": task_description,
                 "uploaded_dataset_name": dataset_name,
                 "uploaded_labels_name": labels_name,
+                "max_approaches": SETTINGS.max_approaches,
+                "max_parallel_agents": SETTINGS.max_parallel_agents,
+                "max_tuning_iterations": SETTINGS.max_tuning_iterations,
                 "submitted_from": "dashboard-next",
                 "created_at": datetime.now(tz=UTC).isoformat(),
             },
         )
+
+        # Keep the first stage truthful in the UI for newly created runs.
+        update_flowchart_stage(swarm_run_id, "prepare_dataset", "active")
+        update_flowchart_stage(swarm_run_id, "prepare_dataset", "complete")
+        update_flowchart_stage(swarm_run_id, "load_modal", "active")
 
         _, dataset_remote_path, labels_remote_path = _build_remote_paths(
             user_id,
@@ -135,6 +148,7 @@ def create_app() -> FastAPI:
             "Starting orchestration pipeline on Modal...",
             "load_modal",
         )
+        update_flowchart_stage(swarm_run_id, "load_modal", "complete")
 
         run_cfg = RunConfig(
             dataset_path=f"/vol{dataset_remote_path}",

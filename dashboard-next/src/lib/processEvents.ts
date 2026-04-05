@@ -30,8 +30,6 @@ export function processEvents(events: RawEvent[]): PipelineState | null {
 
       case "plan_complete":
         state.planCompletedAt = ev.ts;
-        state.estimatedCostUsd = ev.cost_estimate?.estimated_cost_usd;
-        state.runBudgetUsd = ev.cost_estimate?.assumptions?.run_budget_usd;
         if (Array.isArray(ev.approaches)) {
           for (const a of ev.approaches) {
             if (!approachMap.has(a.name)) {

@@ -6,6 +6,7 @@ Prefer techniques that align with the cited evidence and avoid methods that are 
 
 Requirements:
 - Return JSON only.
+- Return exactly the number of approaches requested by max_approaches.
 - Prefer diverse modeling families (mix sklearn and pytorch).
 - Include a short rationale for each approach.
 - Keep hyperparameters concise and realistic.

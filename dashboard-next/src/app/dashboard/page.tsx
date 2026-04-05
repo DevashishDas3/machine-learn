@@ -22,6 +22,8 @@ interface StageData {
   completedAt?: string;
   metrics?: Record<string, number>;
   details?: string;
+  codeArtifacts?: CodeArtifact[];
+  tuningSummary?: TuningApproachSummary[];
 }
 
 interface ConnectionData {
@@ -50,6 +52,12 @@ interface SwarmRun {
   flowchart_data: FlowchartData | null;
   final_report: FinalReport | null;
   chat_messages: ChatMessage[];
+  run_data?: {
+    max_approaches?: number;
+    max_parallel_agents?: number;
+    max_tuning_iterations?: number;
+    [key: string]: unknown;
+  } | null;
 }
 
 interface ChatMessage {
@@ -58,6 +66,29 @@ interface ChatMessage {
   content: string;
   timestamp: string;
   stage?: string;
+}
+
+interface CodeArtifact {
+  id: string;
+  label: string;
+  language?: string;
+  code: string;
+}
+
+interface TuningRoundSummary {
+  iteration: number;
+  hyperparameters?: Record<string, unknown>;
+  metrics?: Record<string, number>;
+  error?: string | null;
+}
+
+interface TuningApproachSummary {
+  approach: string;
+  framework?: string;
+  primary_metric?: string;
+  initial?: number;
+  best?: number;
+  rounds: TuningRoundSummary[];
 }
 
 // ============================================
@@ -179,12 +210,15 @@ function ChatPane({
   isRunning: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const visibleMessages = messages.filter(
+    (msg) => !msg.content.trimStart().startsWith("[CODE]["),
+  );
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [visibleMessages]);
 
   const roleStyles: Record<string, { bg: string; label: string; textColor: string }> = {
     system: { bg: "bg-white/5", label: "SYS", textColor: "text-paper/60" },
@@ -213,12 +247,12 @@ function ChatPane({
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-        {messages.length === 0 ? (
+        {visibleMessages.length === 0 ? (
           <div className="text-center py-8">
             <p className="font-mono text-xs text-paper/30">No messages yet</p>
           </div>
         ) : (
-          messages.map((msg) => {
+          visibleMessages.map((msg) => {
             const style = roleStyles[msg.role] ?? roleStyles.system;
             return (
               <motion.div
@@ -267,222 +301,725 @@ function ChatPane({
 }
 
 // ============================================
-// Stage Node Positions for Flowchart
+// Flow Tree Helpers
 // ============================================
 
-const STAGE_CONFIG: Record<string, { x: number; y: number; label: string }> = {
-  prepare_dataset: { x: 400, y: 50, label: "Prepare Dataset" },
-  load_modal: { x: 400, y: 130, label: "Load to Modal Volume" },
-  plan_agent: { x: 400, y: 210, label: "PlanAgent" },
-  implement_agent: { x: 400, y: 290, label: "ImplementationAgent" },
-  tune_agent: { x: 400, y: 370, label: "TuningAgent" },
-  report_agent: { x: 400, y: 450, label: "ReportAgent" },
-};
-
-const CONNECTIONS: Array<[string, string]> = [
-  ["prepare_dataset", "load_modal"],
-  ["load_modal", "plan_agent"],
-  ["plan_agent", "implement_agent"],
-  ["implement_agent", "tune_agent"],
-  ["tune_agent", "report_agent"],
+const STAGE_ORDER = [
+  "prepare_dataset",
+  "load_modal",
+  "plan_agent",
+  "implement_agent",
+  "tune_agent",
+  "report_agent",
 ];
 
+const STAGE_LABELS: Record<string, string> = {
+  prepare_dataset: "Prepare Dataset",
+  load_modal: "Load to Modal Volume",
+  plan_agent: "Planning",
+  implement_agent: "Code Generation + Initial Training",
+  tune_agent: "Hyperparameter Tuning",
+  report_agent: "Report",
+};
+
+const STATUS_RANK: Record<SwarmRun["status"], number> = {
+  pending: 0,
+  running: 1,
+  error: 2,
+  complete: 3,
+};
+
+function parseIsoTimestamp(value?: string | null): number {
+  if (!value) return -1;
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? ts : -1;
+}
+
+function stageRank(phase?: string | null): number {
+  if (!phase) return -1;
+  return STAGE_ORDER.indexOf(phase);
+}
+
+function flowStageStatusRank(run: SwarmRun | null | undefined, stageId: string): number {
+  const stage = run?.flowchart_data?.stages?.find((s) => s.id === stageId);
+  const status = stage?.status;
+  if (status === "error") return 3;
+  if (status === "complete") return 2;
+  if (status === "active") return 1;
+  return 0;
+}
+
+function compareFlowProgress(
+  existing: SwarmRun | null | undefined,
+  incoming: SwarmRun | null | undefined,
+): number {
+  if (!existing || !incoming) return 0;
+
+  let incomingAhead = false;
+  let existingAhead = false;
+
+  for (const stageId of STAGE_ORDER) {
+    const a = flowStageStatusRank(existing, stageId);
+    const b = flowStageStatusRank(incoming, stageId);
+    if (b > a) incomingAhead = true;
+    if (a > b) existingAhead = true;
+  }
+
+  if (incomingAhead && !existingAhead) return 1;
+  if (existingAhead && !incomingAhead) return -1;
+  return 0;
+}
+
+function inferFlowPhase(flowchartData?: FlowchartData | null): string {
+  const stages = flowchartData?.stages;
+  if (!Array.isArray(stages) || stages.length === 0) return "pending";
+
+  let highestComplete = -1;
+  let highestActive = -1;
+  let highestError = -1;
+
+  for (const stage of stages) {
+    const idx = stageRank(stage.id);
+    if (idx < 0) continue;
+    if (stage.status === "complete") highestComplete = Math.max(highestComplete, idx);
+    if (stage.status === "active") highestActive = Math.max(highestActive, idx);
+    if (stage.status === "error") highestError = Math.max(highestError, idx);
+  }
+
+  if (highestError >= 0) return STAGE_ORDER[highestError];
+  if (highestActive >= 0) return STAGE_ORDER[highestActive];
+  if (highestComplete >= 0) return STAGE_ORDER[highestComplete];
+  return "pending";
+}
+
+function getFlowPhase(run: SwarmRun | null | undefined): string {
+  if (!run) return "pending";
+
+  const explicit = run.current_phase;
+  const inferred = inferFlowPhase(run.flowchart_data);
+  const explicitRank = stageRank(explicit);
+  const inferredRank = stageRank(inferred);
+
+  if (inferredRank > explicitRank) return inferred;
+  if (explicitRank >= 0) return explicit;
+
+  if (run.status === "complete") return "report_agent";
+  return inferred;
+}
+
+function getPhaseBadgeValue(run: SwarmRun | null | undefined): string {
+  if (!run) return "pending";
+  if (run.status === "complete") return "complete";
+  if (run.status === "error") return "error";
+  return getFlowPhase(run);
+}
+
+function pickPreferredRun(
+  existing: SwarmRun | null | undefined,
+  incoming: SwarmRun | null | undefined,
+): SwarmRun | null {
+  if (!existing && !incoming) return null;
+  if (!existing) return incoming ?? null;
+  if (!incoming) return existing;
+
+  const flowCompare = compareFlowProgress(existing, incoming);
+  if (flowCompare > 0) return incoming;
+  if (flowCompare < 0) return existing;
+
+  const existingUpdated = parseIsoTimestamp(existing.updated_at);
+  const incomingUpdated = parseIsoTimestamp(incoming.updated_at);
+  if (incomingUpdated > existingUpdated) return incoming;
+  if (incomingUpdated < existingUpdated) return existing;
+
+  const existingRank = stageRank(getFlowPhase(existing));
+  const incomingRank = stageRank(getFlowPhase(incoming));
+  if (incomingRank > existingRank) return incoming;
+  if (incomingRank < existingRank) return existing;
+
+  const existingStatusRank = STATUS_RANK[existing.status] ?? 0;
+  const incomingStatusRank = STATUS_RANK[incoming.status] ?? 0;
+  if (incomingStatusRank > existingStatusRank) return incoming;
+  if (incomingStatusRank < existingStatusRank) return existing;
+
+  const existingMessages = existing.chat_messages?.length ?? 0;
+  const incomingMessages = incoming.chat_messages?.length ?? 0;
+  if (incomingMessages > existingMessages) return incoming;
+  if (incomingMessages < existingMessages) return existing;
+
+  return incoming;
+}
+
+function upsertRun(runs: SwarmRun[], incoming: SwarmRun): SwarmRun[] {
+  let found = false;
+  const next = runs.map((run) => {
+    if (run.id !== incoming.id) return run;
+    found = true;
+    return pickPreferredRun(run, incoming) ?? run;
+  });
+  if (!found) {
+    next.unshift(incoming);
+  }
+  return next;
+}
+
+function mergeRunLists(existing: SwarmRun[], incoming: SwarmRun[]): SwarmRun[] {
+  let merged = [...existing];
+  for (const run of incoming) {
+    merged = upsertRun(merged, run);
+  }
+  return merged.sort(
+    (a, b) => parseIsoTimestamp(b.created_at) - parseIsoTimestamp(a.created_at),
+  );
+}
+
+function formatDurationSeconds(startedAt?: string, completedAt?: string): string | null {
+  if (!startedAt) return null;
+  const start = new Date(startedAt).getTime();
+  const end = completedAt ? new Date(completedAt).getTime() : Date.now();
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
+  const seconds = (end - start) / 1000;
+  if (seconds < 1) return `${(seconds * 1000).toFixed(0)}ms`;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds - minutes * 60;
+  return `${minutes}m ${remainder.toFixed(1)}s`;
+}
+
+function formatMetricValue(value: number): string {
+  if (Number.isInteger(value)) return `${value}`;
+  if (Math.abs(value) >= 1) return value.toFixed(3);
+  return value.toFixed(4);
+}
+
+function looksLikeCode(content: string): boolean {
+  if (!content.trim()) return false;
+  if (content.includes("```") || content.includes("def ") || content.includes("class ")) {
+    return true;
+  }
+  return content.includes("import ") || content.includes("from ");
+}
+
+function extractCode(content: string): string {
+  const fence = /```(?:[a-zA-Z]+)?\n([\s\S]*?)```/m.exec(content);
+  if (fence?.[1]) return fence[1].trim();
+  return content.trim();
+}
+
+function extractCodeArtifacts(
+  stageId: string,
+  stageLabel: string,
+  stageCodeArtifacts: CodeArtifact[] | undefined,
+  stageDetails: string | undefined,
+  stageMessages: ChatMessage[],
+  finalReport: FinalReport | null,
+): CodeArtifact[] {
+  const artifacts: CodeArtifact[] = [];
+
+  if (Array.isArray(stageCodeArtifacts) && stageCodeArtifacts.length > 0) {
+    for (const artifact of stageCodeArtifacts) {
+      if (!artifact?.code) continue;
+      artifacts.push({
+        id: `${stageId}-artifact-${artifact.label}`,
+        label: artifact.label,
+        language: artifact.language,
+        code: artifact.code,
+      });
+    }
+    return artifacts;
+  }
+
+  for (const msg of stageMessages) {
+    const marker = msg.content.match(/^\[CODE\]\[([^\]]+)\]/m);
+    if (!marker) continue;
+    const code = extractCode(msg.content);
+    if (!code) continue;
+    artifacts.push({
+      id: `${stageId}-${msg.id}`,
+      label: marker[1],
+      language: "python",
+      code,
+    });
+  }
+
+  if (artifacts.length === 0 && stageDetails && looksLikeCode(stageDetails)) {
+    artifacts.push({
+      id: `${stageId}-details`,
+      label: stageLabel,
+      language: "python",
+      code: extractCode(stageDetails),
+    });
+  }
+
+  if (
+    artifacts.length === 0 &&
+    stageId === "report_agent" &&
+    typeof finalReport?.report === "string" &&
+    looksLikeCode(finalReport.report)
+  ) {
+    artifacts.push({
+      id: `${stageId}-report`,
+      label: "final_report.md",
+      language: "markdown",
+      code: extractCode(finalReport.report),
+    });
+  }
+
+  return artifacts;
+}
+
+function normalizeReportMarkdown(report: string): string {
+  const trimmed = report.trim();
+  const fenced = /^```(?:markdown|md)?\n([\s\S]*?)\n```$/i.exec(trimmed);
+  return fenced?.[1]?.trim() ?? report;
+}
+
+function scoreToPercent(value?: number): number | null {
+  if (typeof value !== "number" || Number.isNaN(value)) return null;
+  if (value >= 0 && value <= 1) return value * 100;
+  return value;
+}
+
+function tokenizePythonLine(line: string): Array<{ text: string; cls: string }> {
+  const keyword = /\b(def|class|return|if|elif|else|for|while|try|except|finally|with|as|import|from|async|await|pass|break|continue|yield|lambda|in|is|not|and|or|None|True|False)\b/g;
+  if (line.trimStart().startsWith("#")) {
+    return [{ text: line, cls: "text-emerald-400" }];
+  }
+  const quoteMatch = line.match(/(['"][^'"]*['"])/g);
+  let transformed = line;
+  if (quoteMatch) {
+    for (const q of quoteMatch) {
+      transformed = transformed.replace(q, `@@STR@@${q}@@END@@`);
+    }
+  }
+  transformed = transformed.replace(keyword, "@@KW@@$1@@END@@");
+  const pieces = transformed.split(/(@@KW@@.*?@@END@@|@@STR@@.*?@@END@@)/g).filter(Boolean);
+  return pieces.map((piece) => {
+    if (piece.startsWith("@@KW@@")) {
+      return { text: piece.replace(/^@@KW@@|@@END@@$/g, ""), cls: "text-sky-300" };
+    }
+    if (piece.startsWith("@@STR@@")) {
+      return { text: piece.replace(/^@@STR@@|@@END@@$/g, ""), cls: "text-amber-300" };
+    }
+    return { text: piece, cls: "text-zinc-200" };
+  });
+}
+
+function renderCodeLine(line: string, language?: string): Array<{ text: string; cls: string }> {
+  if (language === "python") return tokenizePythonLine(line);
+  if (language === "markdown") {
+    if (line.startsWith("#")) return [{ text: line, cls: "text-cyan-300" }];
+    if (line.startsWith("- ") || line.startsWith("* ")) {
+      return [{ text: line, cls: "text-violet-300" }];
+    }
+    if (line.includes("|")) return [{ text: line, cls: "text-emerald-300" }];
+  }
+  return [{ text: line, cls: "text-zinc-200" }];
+}
+
+function isSameRunSnapshot(a: SwarmRun | null | undefined, b: SwarmRun | null | undefined): boolean {
+  if (!a || !b) return false;
+  const preferred = pickPreferredRun(a, b);
+  return preferred === a;
+}
+
+function normalizeStatus(
+  stage: StageData,
+  stageId: string,
+  currentPhase: string,
+): "pending" | "active" | "complete" | "error" {
+  // Older runs may never emit prepare_dataset updates; infer completion once we move on.
+  if (stageId === "prepare_dataset" && stage.status === "pending") {
+    const currentIdx = STAGE_ORDER.indexOf(currentPhase);
+    if (currentIdx > 0) return "complete";
+  }
+  if (stage.status) return stage.status;
+  const currentIdx = STAGE_ORDER.indexOf(currentPhase);
+  const stageIdx = STAGE_ORDER.indexOf(stageId);
+  if (stageIdx < currentIdx) return "complete";
+  if (stageIdx === currentIdx) return "active";
+  return "pending";
+}
+
+function inferParallelTotal(
+  stageId: string,
+  runData: SwarmRun["run_data"],
+  stageMessages: ChatMessage[],
+): number {
+  if (stageId !== "implement_agent" && stageId !== "tune_agent") return 1;
+
+  const configured =
+    typeof runData?.max_approaches === "number" && Number.isFinite(runData.max_approaches)
+      ? Math.max(1, Math.floor(runData.max_approaches))
+      : null;
+  if (configured) return configured;
+
+  for (const msg of stageMessages) {
+    const m = msg.content.match(/(\d+)\s*\/\s*(\d+)\s+successful/i);
+    if (m?.[2]) {
+      const parsed = Number.parseInt(m[2], 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+
+  return 3;
+}
+
+function inferParallelCompleted(
+  status: "pending" | "active" | "complete" | "error",
+  metrics: Record<string, number>,
+  stageMessages: ChatMessage[],
+  total: number,
+): number {
+  if (status === "pending") return 0;
+  if (status === "complete") return total;
+
+  const metricValue = metrics.successful_runs;
+  if (typeof metricValue === "number" && Number.isFinite(metricValue)) {
+    return Math.max(0, Math.min(total, Math.floor(metricValue)));
+  }
+
+  for (const msg of stageMessages) {
+    const m = msg.content.match(/(\d+)\s*\/\s*(\d+)\s+successful/i);
+    if (m?.[1]) {
+      const parsed = Number.parseInt(m[1], 10);
+      if (Number.isFinite(parsed)) {
+        return Math.max(0, Math.min(total, parsed));
+      }
+    }
+  }
+
+  if (status === "error") return 0;
+  return 0;
+}
+
+function CodePreviewModal({
+  title,
+  code,
+  language,
+  onClose,
+}: {
+  title: string;
+  code: string;
+  language?: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="absolute inset-0 bg-black/80" />
+      <div className="relative w-full max-w-4xl max-h-[90vh] flex flex-col border border-white/10 bg-obsidian overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
+          <span className="font-mono text-xs text-paper/60">{title}</span>
+          <button
+            onClick={onClose}
+            className="p-1 hover:bg-white/10 text-paper/50 hover:text-paper transition-colors"
+          >
+            <XIcon className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="flex-1 overflow-auto p-4">
+          <div className="border border-zinc-700 bg-zinc-950/80 overflow-auto">
+            {code.split("\n").map((line, idx) => {
+              const segments = renderCodeLine(line, language);
+              return (
+                <div key={idx} className="grid grid-cols-[56px_1fr] font-mono text-xs leading-6">
+                  <span className="select-none border-r border-zinc-800 bg-zinc-900/70 px-3 text-zinc-500 text-right">
+                    {idx + 1}
+                  </span>
+                  <span className="px-3 whitespace-pre">
+                    {segments.map((segment, segIdx) => (
+                      <span key={segIdx} className={segment.cls}>
+                        {segment.text}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ============================================
-// Flowchart Component (SVG-based)
+// Flow Tree Component
 // ============================================
 
-function Flowchart({
+function FlowTree({
   flowchartData,
   currentPhase,
+  chatMessages,
+  finalReport,
+  runData,
 }: {
   flowchartData: FlowchartData | null;
   currentPhase: string;
+  chatMessages: ChatMessage[];
+  finalReport: FinalReport | null;
+  runData: SwarmRun["run_data"];
 }) {
-  const getStageStatus = (stageId: string): "pending" | "active" | "complete" | "error" => {
-    if (flowchartData?.stages) {
-      const stage = flowchartData.stages.find((s) => s.id === stageId);
-      if (stage) return stage.status;
-    }
-    
-    const stageOrder = Object.keys(STAGE_CONFIG);
-    const currentIdx = stageOrder.indexOf(currentPhase);
-    const stageIdx = stageOrder.indexOf(stageId);
-    
-    if (stageIdx < currentIdx) return "complete";
-    if (stageIdx === currentIdx) return "active";
-    return "pending";
-  };
+  const [activeCode, setActiveCode] = useState<{ title: string; code: string; language?: string } | null>(null);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "complete":
-        return { fill: "#10B981", stroke: "#10B981", text: "#F9F8F7" };
-      case "active":
-        return { fill: "#0080FE", stroke: "#0080FE", text: "#F9F8F7" };
-      case "error":
-        return { fill: "#EF4444", stroke: "#EF4444", text: "#F9F8F7" };
-      default:
-        return { fill: "#1a1f23", stroke: "#ffffff1a", text: "#F9F8F780" };
-    }
-  };
+  const sourceStages = flowchartData?.stages ?? [];
+  const orderedStages: StageData[] = STAGE_ORDER.map((id) => {
+    const found = sourceStages.find((stage) => stage.id === id);
+    if (found) return found;
+    return {
+      id,
+      label: STAGE_LABELS[id] ?? id,
+      status: "pending",
+    };
+  });
+
+  const currentPhaseIdx = STAGE_ORDER.indexOf(currentPhase);
+  const maxVisibleIdx = currentPhaseIdx >= 0 ? currentPhaseIdx : 0;
+  const visibleStages = orderedStages.filter((stage, idx) => {
+    const status = normalizeStatus(stage, stage.id, currentPhase);
+    if (status !== "pending") return true;
+    return idx <= maxVisibleIdx;
+  });
 
   return (
-    <div className="w-full h-full flex items-center justify-center">
-      <svg viewBox="0 0 800 520" className="w-full h-auto max-h-[400px]">
-        <defs>
-          <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation="4" result="coloredBlur" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          <filter id="glowActive" x="-100%" y="-100%" width="300%" height="300%">
-            <feGaussianBlur stdDeviation="8" result="coloredBlur" />
-            <feMerge>
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="coloredBlur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-        </defs>
+    <>
+      <div className="relative pl-10">
+        <div className="absolute left-4 top-2 bottom-2 w-px bg-white/10" />
 
-        {/* Connections */}
-        {CONNECTIONS.map(([from, to], idx) => {
-          const fromConfig = STAGE_CONFIG[from];
-          const toConfig = STAGE_CONFIG[to];
-          const fromStatus = getStageStatus(from);
-          const toStatus = getStageStatus(to);
-          const isActive = fromStatus === "complete" || fromStatus === "active";
+        <div className="space-y-4">
+          {visibleStages.map((stage, index) => {
+            const status = normalizeStatus(stage, stage.id, currentPhase);
+            const stageMessages = chatMessages.filter((msg) => msg.stage === stage.id);
+            const stageDuration = formatDurationSeconds(stage.startedAt, stage.completedAt);
 
-          return (
-            <g key={`conn-${idx}`}>
-              <motion.line
-                x1={fromConfig.x}
-                y1={fromConfig.y + 25}
-                x2={toConfig.x}
-                y2={toConfig.y - 25}
-                stroke={isActive ? "#0080FE" : "#ffffff1a"}
-                strokeWidth={isActive ? 2 : 1}
-                initial={{ pathLength: 0 }}
-                animate={{ pathLength: 1 }}
-                transition={{ duration: 0.5, delay: idx * 0.1 }}
-              />
-              {isActive && (
-                <motion.circle
-                  r={3}
-                  fill="#0080FE"
-                  initial={{ opacity: 0 }}
-                  animate={{
-                    opacity: [0.5, 1, 0.5],
-                    cx: [fromConfig.x, toConfig.x],
-                    cy: [fromConfig.y + 25, toConfig.y - 25],
-                  }}
-                  transition={{
-                    duration: 2,
-                    repeat: Infinity,
-                    ease: "linear",
-                  }}
-                />
-              )}
-            </g>
-          );
-        })}
+            const metricsFromStage = stage.metrics ?? {};
+            const metricsFromReport: Record<string, number> =
+              stage.id === "report_agent"
+                ? {
+                    ...(typeof finalReport?.accuracy === "number" ? { accuracy: finalReport.accuracy } : {}),
+                    ...(typeof finalReport?.loss === "number" ? { loss: finalReport.loss } : {}),
+                    ...(typeof finalReport?.totalTimeGpu === "number"
+                      ? { totalTimeGpu: finalReport.totalTimeGpu }
+                      : {}),
+                  }
+                : {};
+            const metrics = { ...metricsFromStage, ...metricsFromReport };
 
-        {/* Stage Nodes */}
-        {Object.entries(STAGE_CONFIG).map(([id, config]) => {
-          const status = getStageStatus(id);
-          const colors = getStatusColor(status);
-          const isActive = status === "active";
+            const stageLabel = stage.label || STAGE_LABELS[stage.id] || stage.id;
+            const codeArtifacts = extractCodeArtifacts(
+              stage.id,
+              stageLabel,
+              stage.codeArtifacts,
+              stage.details,
+              stageMessages,
+              finalReport,
+            );
+            const tuningSummary = stage.tuningSummary ?? [];
 
-          return (
-            <motion.g
-              key={id}
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.3 }}
-            >
-              {/* Node Box */}
-              <motion.rect
-                x={config.x - 100}
-                y={config.y - 20}
-                width={200}
-                height={40}
-                fill={colors.fill}
-                stroke={colors.stroke}
-                strokeWidth={isActive ? 2 : 1}
-                filter={isActive ? "url(#glowActive)" : undefined}
-                animate={
-                  isActive
-                    ? {
-                        strokeOpacity: [1, 0.5, 1],
-                      }
-                    : {}
-                }
-                transition={
-                  isActive
-                    ? {
-                        duration: 1.5,
-                        repeat: Infinity,
-                        ease: "easeInOut",
-                      }
-                    : {}
-                }
-              />
+            const totalParallel = inferParallelTotal(stage.id, runData, stageMessages);
+            const completedParallel = inferParallelCompleted(
+              status,
+              metrics,
+              stageMessages,
+              totalParallel,
+            );
+            const showParallel =
+              (stage.id === "implement_agent" || stage.id === "tune_agent") && totalParallel > 1;
+            const visibleWorkers = Math.min(totalParallel, 8);
+            const hiddenWorkers = Math.max(0, totalParallel - visibleWorkers);
 
-              {/* Label */}
-              <text
-                x={config.x}
-                y={config.y + 5}
-                textAnchor="middle"
-                fill={colors.text}
-                className="font-mono text-xs"
-                style={{ fontSize: "12px", fontFamily: "monospace" }}
+            const statusDotClass =
+              status === "complete"
+                ? "bg-green-500"
+                : status === "active"
+                ? "bg-azure animate-pulse"
+                : status === "error"
+                ? "bg-red-500"
+                : "bg-white/20";
+
+            return (
+              <motion.div
+                key={stage.id}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2, delay: index * 0.04 }}
+                className="relative"
               >
-                {config.label}
-              </text>
+                <div className={`absolute -left-8 top-3 h-3 w-3 rounded-full ${statusDotClass}`} />
 
-              {/* Status indicator */}
-              {status === "complete" && (
-                <motion.text
-                  x={config.x + 90}
-                  y={config.y + 5}
-                  textAnchor="middle"
-                  fill="#10B981"
-                  style={{ fontSize: "10px" }}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                >
-                  ✓
-                </motion.text>
-              )}
+                <div className="border border-white/10 bg-white/[0.02]">
+                  <div className="px-4 py-3 border-b border-white/10">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-[10px] text-paper/30">{`${index + 1}.`}</span>
+                        <span className="font-mono text-xs text-paper">
+                          {stageLabel}
+                        </span>
+                        {status === "active" && <SpinnerIcon className="w-3 h-3 text-azure" />}
+                        <PhaseBadge phase={status === "active" ? "running" : status} />
+                      </div>
 
-              {isActive && (
-                <motion.circle
-                  cx={config.x - 90}
-                  cy={config.y}
-                  r={4}
-                  fill="#0080FE"
-                  animate={{ scale: [1, 1.5, 1], opacity: [1, 0.5, 1] }}
-                  transition={{ duration: 1, repeat: Infinity }}
-                />
-              )}
-            </motion.g>
-          );
-        })}
+                      <div className="flex items-center gap-3 font-mono text-[10px] text-paper/40">
+                        <span>start: {stage.startedAt ? formatTs(stage.startedAt) : "-"}</span>
+                        <span>end: {stage.completedAt ? formatTs(stage.completedAt) : "-"}</span>
+                        {stageDuration && <span>duration: {stageDuration}</span>}
+                      </div>
+                    </div>
+                  </div>
 
-        {/* A100 Cluster Label */}
-        <text
-          x={620}
-          y={290}
-          fill="#0080FE40"
-          className="font-mono"
-          style={{ fontSize: "10px", fontFamily: "monospace" }}
-        >
-          A100 Cluster
-        </text>
-      </svg>
-    </div>
+                  <div className="px-4 py-3 flex flex-wrap items-center gap-2">
+                    {codeArtifacts.map((artifact) => (
+                      <button
+                        key={artifact.id}
+                        onClick={() =>
+                          setActiveCode({
+                            title: `${stageLabel} - ${artifact.label}`,
+                            code: artifact.code,
+                            language: artifact.language,
+                          })
+                        }
+                        className="border border-azure/40 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-azure transition-colors hover:bg-azure/10"
+                      >
+                        View Code: {artifact.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {showParallel && (
+                    <div className="px-4 pb-3">
+                      <div className="border border-white/10 p-3 bg-white/[0.02]">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-mono text-[10px] uppercase tracking-widest text-paper/40">
+                            {stage.id === "tune_agent" ? "Parallel Tuning Tracks" : "Parallel Agent Workers"}
+                          </span>
+                          <span className="font-mono text-[10px] text-paper/50">
+                            {completedParallel}/{totalParallel} completed
+                          </span>
+                        </div>
+
+                        <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+                          {Array.from({ length: visibleWorkers }).map((_, laneIndex) => {
+                            const laneDone = laneIndex < completedParallel;
+                            const laneRunning = !laneDone && status === "active";
+                            const laneClass = laneDone
+                              ? "bg-green-500/30 border-green-500/50 text-green-400"
+                              : laneRunning
+                              ? "bg-azure/20 border-azure/50 text-azure"
+                              : "bg-white/5 border-white/10 text-paper/40";
+                            return (
+                              <div
+                                key={`${stage.id}-lane-${laneIndex}`}
+                                className={`border px-2 py-1 font-mono text-[10px] ${laneClass}`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span>agent {laneIndex + 1}</span>
+                                  {laneRunning && (
+                                    <span className="flex items-center gap-1 text-azure">
+                                      <SpinnerIcon className="w-3 h-3" />
+                                      live
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {hiddenWorkers > 0 && (
+                          <p className="mt-2 font-mono text-[10px] text-paper/35">
+                            +{hiddenWorkers} more workers
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {stage.id === "tune_agent" && tuningSummary.length > 0 && (
+                    <div className="px-4 pb-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
+                      {tuningSummary.map((summary) => {
+                        const primaryMetric = "accuracy";
+                        const baseline = scoreToPercent(summary.initial);
+                        const best = scoreToPercent(summary.best);
+                        const allScores = [
+                          ...(baseline !== null ? [baseline] : []),
+                          ...(best !== null ? [best] : []),
+                          ...summary.rounds
+                            .map((round) => scoreToPercent(round.metrics?.[primaryMetric]))
+                            .filter((value): value is number => value !== null),
+                        ];
+                        const maxScore = allScores.length > 0 ? Math.max(...allScores) : 100;
+                        return (
+                          <div key={summary.approach} className="border border-white/10 bg-white/[0.02] p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="font-mono text-xs text-paper">{summary.approach}</div>
+                              <div className="font-mono text-[10px] text-paper/50">best {best !== null ? `${best.toFixed(2)}%` : "-"}</div>
+                            </div>
+
+                            {baseline !== null && (
+                              <div className="mb-2">
+                                <div className="flex items-center justify-between font-mono text-[10px] text-paper/45 mb-1">
+                                  <span>Initial</span>
+                                  <span>{baseline.toFixed(2)}%</span>
+                                </div>
+                                <div className="h-2 bg-white/10 overflow-hidden">
+                                  <div className="h-full bg-emerald-400" style={{ width: `${Math.max(2, (baseline / maxScore) * 100)}%` }} />
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="space-y-2">
+                              {summary.rounds.map((round) => {
+                                const roundScore = scoreToPercent(round.metrics?.[primaryMetric]);
+                                return (
+                                  <div key={`${summary.approach}-${round.iteration}`}>
+                                    <div className="flex items-center justify-between font-mono text-[10px] text-paper/45 mb-1">
+                                      <span>Round {round.iteration}</span>
+                                      <span>{roundScore !== null ? `${roundScore.toFixed(2)}%` : "-"}</span>
+                                    </div>
+                                    <div className="h-2 bg-white/10 overflow-hidden">
+                                      <div className="h-full bg-violet-400" style={{ width: `${Math.max(2, roundScore !== null ? (roundScore / maxScore) * 100 : 2)}%` }} />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            );
+          })}
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {activeCode && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <CodePreviewModal
+              title={activeCode.title}
+              code={activeCode.code}
+              language={activeCode.language}
+              onClose={() => setActiveCode(null)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   );
 }
 
@@ -510,61 +1047,15 @@ function ResultsPanel({ report }: { report: FinalReport | null }) {
         Final Results
       </p>
 
-      <div className="grid grid-cols-2 gap-4">
-        {/* Accuracy */}
-        <div className="border border-white/10 p-3">
-          <p className="font-mono text-[9px] text-paper/40 uppercase mb-1">
-            Final Accuracy
-          </p>
-          <p className="font-mono text-xl text-green-400">
-            {typeof report.accuracy === "number"
-              ? `${(report.accuracy * 100).toFixed(2)}%`
-              : "—"}
-          </p>
-        </div>
-
-        {/* Loss */}
-        <div className="border border-white/10 p-3">
-          <p className="font-mono text-[9px] text-paper/40 uppercase mb-1">
-            Training Loss
-          </p>
-          <p className="font-mono text-xl text-paper">
-            {typeof report.loss === "number" ? report.loss.toFixed(4) : "—"}
-          </p>
-        </div>
-
-        {/* GPU Time */}
-        <div className="border border-white/10 p-3">
-          <p className="font-mono text-[9px] text-paper/40 uppercase mb-1">
-            Total Time (GPU)
-          </p>
-          <p className="font-mono text-xl text-azure">
-            {typeof report.totalTimeGpu === "number"
-              ? `${report.totalTimeGpu.toFixed(1)}s`
-              : "—"}
-          </p>
-        </div>
-
-        {/* Hyperparameters */}
-        <div className="border border-white/10 p-3">
-          <p className="font-mono text-[9px] text-paper/40 uppercase mb-1">
-            Best Hyperparameters
-          </p>
-          {report.bestHyperparameters ? (
-            <div className="font-mono text-[10px] text-paper/60 space-y-1">
-              {Object.entries(report.bestHyperparameters)
-                .slice(0, 3)
-                .map(([k, v]) => (
-                  <div key={k}>
-                    <span className="text-paper/40">{k}:</span>{" "}
-                    <span className="text-paper">{String(v)}</span>
-                  </div>
-                ))}
-            </div>
-          ) : (
-            <p className="font-mono text-xs text-paper/30">—</p>
-          )}
-        </div>
+      <div className="border border-white/10 p-3">
+        <p className="font-mono text-[9px] text-paper/40 uppercase mb-1">
+          Final Accuracy
+        </p>
+        <p className="font-mono text-xl text-green-400">
+          {typeof report.accuracy === "number"
+            ? `${(report.accuracy * 100).toFixed(2)}%`
+            : "—"}
+        </p>
       </div>
 
       {/* Recommendation */}
@@ -580,6 +1071,172 @@ function ResultsPanel({ report }: { report: FinalReport | null }) {
       )}
     </div>
   );
+}
+
+function inlineFormat(text: string): Array<string | JSX.Element> {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      return (
+        <strong key={i} className="text-zinc-100 font-semibold">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return (
+        <code key={i} className="px-1 py-0.5 rounded bg-zinc-800 text-violet-300 text-[11px] font-mono">
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    return part;
+  });
+}
+
+function renderMarkdown(md: string): JSX.Element {
+  const normalized = normalizeReportMarkdown(md);
+  const lines = normalized.split("\n");
+  const elements: JSX.Element[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.startsWith("```")) {
+      const language = line.slice(3).trim() || "text";
+      const block: string[] = [];
+      i += 1;
+      while (i < lines.length && !lines[i].startsWith("```")) {
+        block.push(lines[i]);
+        i += 1;
+      }
+      elements.push(
+        <div key={`code-${i}`} className="my-3 border border-zinc-700 bg-zinc-950/80 overflow-auto">
+          {block.map((codeLine, idx) => {
+            const segments = renderCodeLine(codeLine, language);
+            return (
+              <div key={idx} className="grid grid-cols-[56px_1fr] font-mono text-xs leading-6">
+                <span className="select-none border-r border-zinc-800 bg-zinc-900/70 px-3 text-zinc-500 text-right">
+                  {idx + 1}
+                </span>
+                <span className="px-3 whitespace-pre">
+                  {segments.map((segment, segIdx) => (
+                    <span key={segIdx} className={segment.cls}>
+                      {segment.text}
+                    </span>
+                  ))}
+                </span>
+              </div>
+            );
+          })}
+        </div>,
+      );
+      i += 1;
+      continue;
+    }
+
+    if (line.startsWith("# ")) {
+      elements.push(
+        <h1 key={`h1-${i}`} className="text-xl font-bold text-zinc-100 mt-5 mb-2">
+          {line.slice(2)}
+        </h1>,
+      );
+      i += 1;
+      continue;
+    }
+
+    if (line.startsWith("## ")) {
+      elements.push(
+        <h2 key={`h2-${i}`} className="text-base font-semibold text-zinc-200 mt-4 mb-1.5 border-b border-zinc-800 pb-1">
+          {line.slice(3)}
+        </h2>,
+      );
+      i += 1;
+      continue;
+    }
+
+    if (line.startsWith("### ")) {
+      elements.push(
+        <h3 key={`h3-${i}`} className="text-sm font-semibold text-zinc-300 mt-3 mb-1">
+          {line.slice(4)}
+        </h3>,
+      );
+      i += 1;
+      continue;
+    }
+
+    if (line.includes("|") && lines[i + 1]?.includes("---")) {
+      const headers = line.split("|").filter((cell) => cell.trim());
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].includes("|")) {
+        rows.push(lines[i].split("|").filter((cell) => cell.trim()));
+        i += 1;
+      }
+      elements.push(
+        <div key={`table-${i}`} className="overflow-x-auto my-3">
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr>
+                {headers.map((header, hi) => (
+                  <th key={hi} className="px-3 py-2 text-left text-zinc-400 font-medium border-b border-zinc-700 bg-zinc-800/60">
+                    {header.trim()}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={ri} className="border-b border-zinc-800 hover:bg-zinc-800/30">
+                  {row.map((cell, ci) => (
+                    <td key={ci} className="px-3 py-2 text-zinc-300">
+                      {cell.trim()}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
+
+    if (line.startsWith("- ") || line.startsWith("* ")) {
+      const items: string[] = [line.slice(2)];
+      i += 1;
+      while (i < lines.length && (lines[i].startsWith("- ") || lines[i].startsWith("* "))) {
+        items.push(lines[i].slice(2));
+        i += 1;
+      }
+      elements.push(
+        <ul key={`list-${i}`} className="my-1.5 space-y-0.5 list-none">
+          {items.map((item, ii) => (
+            <li key={ii} className="flex gap-2 text-sm text-zinc-300">
+              <span className="text-violet-500 shrink-0">·</span>
+              <span>{inlineFormat(item)}</span>
+            </li>
+          ))}
+        </ul>,
+      );
+      continue;
+    }
+
+    if (line.trim() === "") {
+      elements.push(<div key={`sp-${i}`} className="h-2" />);
+      i += 1;
+      continue;
+    }
+
+    elements.push(
+      <p key={`p-${i}`} className="text-sm text-zinc-300 leading-relaxed">
+        {inlineFormat(line)}
+      </p>,
+    );
+    i += 1;
+  }
+
+  return <>{elements}</>;
 }
 
 // ============================================
@@ -641,9 +1298,7 @@ function ReportModal({
 
         {/* Report Content */}
         <div className="flex-1 overflow-auto p-4">
-          <pre className="font-mono text-sm text-paper/70 leading-relaxed whitespace-pre-wrap">
-            {report.report || "No detailed report available."}
-          </pre>
+          {renderMarkdown(report.report || "No detailed report available.")}
         </div>
 
         {/* Footer */}
@@ -700,9 +1355,10 @@ export default function DashboardPage() {
       if (error) {
         console.error("Error loading runs:", error);
       } else {
-        setRuns(data || []);
-        if (data && data.length > 0 && !selectedRunId) {
-          setSelectedRunId(data[0].id);
+        const fetched = (data || []) as SwarmRun[];
+        setRuns((prev) => mergeRunLists(prev, fetched));
+        if (fetched.length > 0 && !selectedRunId) {
+          setSelectedRunId(fetched[0].id);
         }
       }
       setIsLoading(false);
@@ -727,21 +1383,25 @@ export default function DashboardPage() {
         },
         (payload) => {
           console.log("Realtime update:", payload);
-          setLastUpdated(new Date());
 
           if (payload.eventType === "INSERT") {
             const newRun = payload.new as SwarmRun;
-            setRuns((prev) => [newRun, ...prev]);
+            setLastUpdated(new Date());
+            setRuns((prev) => upsertRun(prev, newRun));
           } else if (payload.eventType === "UPDATE") {
             const updatedRun = payload.new as SwarmRun;
-            setRuns((prev) =>
-              prev.map((r) => (r.id === updatedRun.id ? updatedRun : r))
-            );
+            setRuns((prev) => {
+              const existing = prev.find((r) => r.id === updatedRun.id) ?? null;
+              if (isSameRunSnapshot(existing, updatedRun)) return prev;
+              setLastUpdated(new Date());
+              return upsertRun(prev, updatedRun);
+            });
             if (selectedRunId === updatedRun.id) {
-              setCurrentRun(updatedRun);
+              setCurrentRun((prev) => pickPreferredRun(prev, updatedRun));
             }
           } else if (payload.eventType === "DELETE") {
             const deletedRun = payload.old as { id: string };
+            setLastUpdated(new Date());
             setRuns((prev) => prev.filter((r) => r.id !== deletedRun.id));
             if (selectedRunId === deletedRun.id) {
               setSelectedRunId(null);
@@ -757,18 +1417,54 @@ export default function DashboardPage() {
     };
   }, [userId, selectedRunId, supabase]);
 
+  // Fallback refresh while a run is live (helps when realtime delivery is delayed).
+  useEffect(() => {
+    if (!userId || !selectedRunId) return;
+
+    const shouldPoll =
+      currentRun?.status === "running" ||
+      (currentRun?.status === "complete" && !currentRun?.final_report?.report);
+    if (!shouldPoll) return;
+
+    const pollRun = async () => {
+      const { data, error } = await supabase
+        .from("swarm_runs")
+        .select("*")
+        .eq("id", selectedRunId)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (error || !data) return;
+
+      const updatedRun = data as SwarmRun;
+      if (isSameRunSnapshot(currentRun, updatedRun)) return;
+      setLastUpdated(new Date());
+      setRuns((prev) => {
+        const existing = prev.find((r) => r.id === updatedRun.id) ?? null;
+        if (isSameRunSnapshot(existing, updatedRun)) return prev;
+        return upsertRun(prev, updatedRun);
+      });
+      setCurrentRun((prev) => pickPreferredRun(prev, updatedRun));
+    };
+
+    pollRun();
+    const id = window.setInterval(pollRun, 2000);
+    return () => window.clearInterval(id);
+  }, [userId, selectedRunId, currentRun?.status, currentRun?.final_report?.report, supabase]);
+
   // Update current run when selection changes
   useEffect(() => {
     if (selectedRunId) {
       const run = runs.find((r) => r.id === selectedRunId);
-      setCurrentRun(run || null);
+      setCurrentRun((prev) => pickPreferredRun(prev, run || null));
     } else {
       setCurrentRun(null);
     }
   }, [selectedRunId, runs]);
 
   const isRunning = currentRun?.status === "running";
-  const currentPhase = currentRun?.current_phase || "pending";
+  const currentPhase = getPhaseBadgeValue(currentRun);
+  const flowPhase = getFlowPhase(currentRun);
   const chatMessages = currentRun?.chat_messages || [];
 
   return (
@@ -895,9 +1591,12 @@ export default function DashboardPage() {
                 <p className="font-mono text-[10px] uppercase tracking-widest text-paper/40 mb-4">
                   Agent Swarm Flow
                 </p>
-                <Flowchart
+                <FlowTree
                   flowchartData={currentRun.flowchart_data}
-                  currentPhase={currentPhase}
+                  currentPhase={flowPhase}
+                  chatMessages={chatMessages}
+                  finalReport={currentRun.final_report}
+                  runData={currentRun.run_data ?? null}
                 />
               </div>
 

@@ -29,6 +29,55 @@ from typing import Optional, Dict, Any, List
 from supabase import create_client, Client
 
 
+STAGE_ORDER = [
+    "prepare_dataset",
+    "load_modal",
+    "plan_agent",
+    "implement_agent",
+    "tune_agent",
+    "report_agent",
+]
+
+STAGE_LABELS: Dict[str, str] = {
+    "prepare_dataset": "Prepare Dataset",
+    "load_modal": "Load to Modal Volume",
+    "plan_agent": "PlanAgent",
+    "implement_agent": "ImplementationAgent",
+    "tune_agent": "TuningAgent",
+    "report_agent": "ReportAgent",
+}
+
+STAGE_INDEX = {stage: idx for idx, stage in enumerate(STAGE_ORDER)}
+STATUS_RANK = {"pending": 0, "active": 1, "complete": 2, "error": 3}
+
+
+def _stage_rank(stage_id: Optional[str]) -> int:
+    if not stage_id:
+        return -1
+    return STAGE_INDEX.get(stage_id, -1)
+
+
+def _status_rank(status: Optional[str]) -> int:
+    if not status:
+        return 0
+    return STATUS_RANK.get(status, 0)
+
+
+def _derive_phase_from_stages(stages: List[Dict[str, Any]]) -> Optional[str]:
+    highest_idx = -1
+    for stage in stages:
+        stage_id = str(stage.get("id") or "")
+        status = str(stage.get("status") or "pending")
+        if _status_rank(status) <= 0:
+            continue
+        idx = _stage_rank(stage_id)
+        if idx > highest_idx:
+            highest_idx = idx
+    if highest_idx >= 0:
+        return STAGE_ORDER[highest_idx]
+    return None
+
+
 def get_supabase_client() -> Client:
     """Create Supabase client using service role key."""
     url = os.environ.get("SUPABASE_URL")
@@ -118,6 +167,8 @@ def update_flowchart_stage(
     status: str,
     details: Optional[str] = None,
     metrics: Optional[Dict[str, float]] = None,
+    code_artifacts: Optional[List[Dict[str, Any]]] = None,
+    tuning_summary: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """
     Update a specific stage in the flowchart.
@@ -128,56 +179,96 @@ def update_flowchart_stage(
         status: New status ("pending", "active", "complete", "error")
         details: Optional status details
         metrics: Optional metrics dict for the stage
+        code_artifacts: Optional code snippets metadata for the stage
+        tuning_summary: Optional per-approach tuning history for visualization
     """
     supabase = get_supabase_client()
 
-    # Fetch current flowchart data
-    result = (
-        supabase.table("swarm_runs")
-        .select("flowchart_data")
-        .eq("id", run_id)
-        .single()
-        .execute()
-    )
-    flowchart_data = result.data["flowchart_data"] or {}
+    # Optimistic concurrency: retry if someone else updated the row after our read.
+    for _ in range(4):
+        result = (
+            supabase.table("swarm_runs")
+            .select("flowchart_data,current_phase,status,updated_at")
+            .eq("id", run_id)
+            .single()
+            .execute()
+        )
+        row = result.data or {}
+        row_status = str(row.get("status") or "pending")
+        prev_updated_at = row.get("updated_at")
+        flowchart_data = row.get("flowchart_data") or {}
 
-    # Update the specific stage
-    stages = flowchart_data.get("stages", [])
-    for stage in stages:
-        if stage["id"] == stage_id:
-            stage["status"] = status
-            if details:
-                stage["details"] = details
-            if metrics:
-                stage["metrics"] = metrics
-            if status == "active":
-                stage["startedAt"] = datetime.utcnow().isoformat()
-            elif status in ("complete", "error"):
-                stage["completedAt"] = datetime.utcnow().isoformat()
-            break
+        # Never regress a completed run back to running/pending states.
+        if row_status == "complete":
+            return
 
-    # Update connections based on stage status
-    connections = flowchart_data.get("connections", [])
-    for conn in connections:
-        # Activate connection if source stage is complete
-        source_stage = next((s for s in stages if s["id"] == conn["from"]), None)
-        if source_stage and source_stage.get("status") == "complete":
-            conn["active"] = True
+        stages = flowchart_data.get("stages", [])
+        if not isinstance(stages, list):
+            stages = []
 
-    flowchart_data["stages"] = stages
-    flowchart_data["connections"] = connections
+        stage = next((s for s in stages if s.get("id") == stage_id), None)
+        if stage is None:
+            stage = {
+                "id": stage_id,
+                "label": STAGE_LABELS.get(stage_id, stage_id),
+                "status": "pending",
+            }
+            stages.append(stage)
 
-    # Update database
-    supabase.table("swarm_runs").update(
-        {
+        existing_status = str(stage.get("status") or "pending")
+        target_status = (
+            existing_status
+            if _status_rank(existing_status) > _status_rank(status)
+            else status
+        )
+        stage["status"] = target_status
+
+        if details:
+            stage["details"] = details
+        if metrics:
+            stage["metrics"] = metrics
+        if code_artifacts is not None:
+            stage["codeArtifacts"] = code_artifacts
+        if tuning_summary is not None:
+            stage["tuningSummary"] = tuning_summary
+
+        if target_status == "active" and not stage.get("startedAt"):
+            stage["startedAt"] = datetime.utcnow().isoformat()
+        elif target_status in ("complete", "error"):
+            stage["completedAt"] = datetime.utcnow().isoformat()
+
+        connections = flowchart_data.get("connections", [])
+        if not isinstance(connections, list):
+            connections = []
+        for conn in connections:
+            source_stage = next(
+                (s for s in stages if s.get("id") == conn.get("from")), None
+            )
+            if source_stage and source_stage.get("status") == "complete":
+                conn["active"] = True
+
+        flowchart_data["stages"] = stages
+        flowchart_data["connections"] = connections
+
+        previous_phase = str(row.get("current_phase") or "")
+        inferred_phase = _derive_phase_from_stages(stages)
+        phase_candidates = [previous_phase, inferred_phase, stage_id]
+        current_phase = max(phase_candidates, key=_stage_rank)
+
+        next_run_status = "error" if target_status == "error" else "running"
+        payload = {
             "flowchart_data": flowchart_data,
-            "current_phase": stage_id,
-            "status": "running"
-            if status == "active"
-            else ("error" if status == "error" else "running"),
+            "current_phase": current_phase,
+            "status": next_run_status,
             "updated_at": datetime.utcnow().isoformat(),
         }
-    ).eq("id", run_id).execute()
+
+        update_query = supabase.table("swarm_runs").update(payload).eq("id", run_id)
+        if prev_updated_at:
+            update_query = update_query.eq("updated_at", prev_updated_at)
+        update_result = update_query.execute()
+        if update_result.data:
+            return
 
 
 def add_chat_message(

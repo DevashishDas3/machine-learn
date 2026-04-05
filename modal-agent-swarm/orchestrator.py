@@ -239,6 +239,8 @@ async def _run_pipeline(
         status: str,
         details: str | None = None,
         metrics: Dict[str, float] | None = None,
+        code_artifacts: List[Dict[str, Any]] | None = None,
+        tuning_summary: List[Dict[str, Any]] | None = None,
     ) -> None:
         if not swarm_run_id:
             return
@@ -251,6 +253,8 @@ async def _run_pipeline(
                 status,
                 details=details,
                 metrics=metrics,
+                code_artifacts=code_artifacts,
+                tuning_summary=tuning_summary,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -318,27 +322,19 @@ async def _run_pipeline(
         f"Generated {len(approaches)} approaches: {', '.join(approach_names)}",
         "plan_agent",
     )
-    dash_msg(
-        "agent",
-        f"Estimated cost: ${cost_estimate.estimated_cost_usd:.2f}",
-        "plan_agent",
-    )
     dash_stage("plan_agent", "complete")
 
     if cost_estimate.estimated_cost_usd > run_cfg.run_budget_usd:
         dash_msg(
             "system",
-            f"❌ Budget exceeded! ${cost_estimate.estimated_cost_usd:.2f} > ${run_cfg.run_budget_usd:.2f}",
+            "❌ Budget exceeded. Run stopped by safety policy.",
             "plan_agent",
         )
         if swarm_run_id:
             from supabase_helpers import fail_run
 
             fail_run(swarm_run_id, f"Budget exceeded", "plan_agent")
-        raise ValueError(
-            f"Estimated run cost ${cost_estimate.estimated_cost_usd:.2f} exceeds budget ${run_cfg.run_budget_usd:.2f}"
-        )
-    ev.emit("budget_ok", run_budget_usd=run_cfg.run_budget_usd)
+        raise ValueError("Estimated run cost exceeds configured budget")
 
     # --- Phase 2a: Generate all code in parallel (no GPU slot needed) ---
     # ImplementationAgent phase (codegen + training)
@@ -380,6 +376,19 @@ async def _run_pipeline(
 
     gen_pairs = await asyncio.gather(*[_gen_code(a) for a in approaches])
     generated_code_by_name: Dict[str, str] = {name: code for name, code in gen_pairs}
+    implement_code_artifacts = [
+        {
+            "label": approach_name,
+            "language": "python",
+            "code": code[:20_000],
+        }
+        for approach_name, code in gen_pairs
+    ]
+    dash_stage(
+        "implement_agent",
+        "active",
+        code_artifacts=implement_code_artifacts,
+    )
     dash_msg(
         "agent",
         f"Code generation complete for {len(gen_pairs)} approaches",
@@ -505,7 +514,12 @@ async def _run_pipeline(
         f"Initial training complete: {n_ok}/{len(approaches)} successful",
         "implement_agent",
     )
-    dash_stage("implement_agent", "complete", metrics={"successful_runs": n_ok})
+    dash_stage(
+        "implement_agent",
+        "complete",
+        metrics={"successful_runs": n_ok},
+        code_artifacts=implement_code_artifacts,
+    )
 
     # TuningAgent phase
     dash_stage("tune_agent", "active")
@@ -516,7 +530,7 @@ async def _run_pipeline(
 
     async def tune_single(
         approach: Approach, current: TrainingResult
-    ) -> Tuple[List[TuningIteration], TrainingResult, Dict[str, Any]]:
+    ) -> Tuple[List[TuningIteration], TrainingResult, Dict[str, Any], str]:
         iterations: List[TuningIteration] = []
         candidate_results: List[Tuple[TrainingResult, Dict[str, Any]]] = [
             (current, dict(approach.hyperparameters))
@@ -662,13 +676,14 @@ async def _run_pipeline(
             framework=approach.framework,
             code_preview=final_code[:20_000],
         )
-        return iterations, best, best_hyperparameters
+        return iterations, best, best_hyperparameters, final_code
 
     tuning_tasks = [tune_single(a, initial_results_by_name[a.name]) for a in approaches]
     tuning_outputs = await asyncio.gather(*tuning_tasks, return_exceptions=True)
 
     approach_runs: List[ApproachRun] = []
     best_hyperparameters_by_name: Dict[str, Dict[str, Any]] = {}
+    tune_code_artifacts: List[Dict[str, Any]] = []
     for approach, tuned in zip(approaches, tuning_outputs):
         initial_result = initial_results_by_name[approach.name]
         if isinstance(tuned, Exception):
@@ -684,8 +699,15 @@ async def _run_pipeline(
             )
             continue
 
-        iterations, best, best_hyperparameters = tuned
+        iterations, best, best_hyperparameters, final_code = tuned
         best_hyperparameters_by_name[approach.name] = best_hyperparameters
+        tune_code_artifacts.append(
+            {
+                "label": approach.name,
+                "language": "python",
+                "code": final_code[:20_000],
+            }
+        )
         approach_runs.append(
             ApproachRun(
                 approach=approach,
@@ -702,7 +724,37 @@ async def _run_pipeline(
         f"Tuning complete: {total_iterations} total iterations across all approaches",
         "tune_agent",
     )
-    dash_stage("tune_agent", "complete")
+    tuning_summary: List[Dict[str, Any]] = []
+    for ar in approach_runs:
+        initial_metric = ar.initial_result.metrics.get(run_cfg.primary_metric)
+        rounds: List[Dict[str, Any]] = []
+        for it in ar.tuning_iterations:
+            rounds.append(
+                {
+                    "iteration": it.iteration,
+                    "hyperparameters": it.hyperparameters,
+                    "metrics": it.result.metrics,
+                    "error": it.result.error,
+                }
+            )
+        best_metric = ar.best_result.metrics.get(run_cfg.primary_metric)
+        tuning_summary.append(
+            {
+                "approach": ar.approach.name,
+                "framework": ar.approach.framework,
+                "primary_metric": run_cfg.primary_metric,
+                "initial": initial_metric,
+                "best": best_metric,
+                "rounds": rounds,
+            }
+        )
+
+    dash_stage(
+        "tune_agent",
+        "complete",
+        code_artifacts=tune_code_artifacts,
+        tuning_summary=tuning_summary,
+    )
 
     best_overall = _pick_best_result(
         [ar.best_result for ar in approach_runs],

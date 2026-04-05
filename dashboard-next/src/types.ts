@@ -84,6 +84,4 @@ export interface PipelineState {
   // Final
   recommendation?: string;
   report?: string;
-  estimatedCostUsd?: number;
-  runBudgetUsd?: number;
 }

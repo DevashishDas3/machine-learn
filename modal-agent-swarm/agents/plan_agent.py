@@ -68,7 +68,9 @@ class PlanAgent:
         self,
         run_cfg: RunConfig,
         research_findings: List[Dict[str, Any]],
+        required_approaches: int | None = None,
     ) -> str:
+        required = required_approaches or run_cfg.max_approaches
         findings_json = json.dumps(research_findings, ensure_ascii=False)[:30_000]
         return (
             f"{self.system_prompt}\n\n"
@@ -78,8 +80,11 @@ class PlanAgent:
             f"Dataset path:\n{run_cfg.dataset_path}\n\n"
             f"Constraints:\n"
             f"- max_approaches={run_cfg.max_approaches}\n"
+            f"- return_exactly={required}\n"
             f"- primary_metric={run_cfg.primary_metric}\n"
             f"- maximize_metric={run_cfg.maximize_metric}\n\n"
+            f"Return exactly {required} approaches unless the task is impossible. "
+            "Do not return fewer than requested for normal tasks.\n\n"
             "Research findings (JSON):\n"
             f"{findings_json if research_findings else '[]'}\n"
         )
@@ -257,6 +262,23 @@ class PlanAgent:
         )
         parsed = parse_model_output(raw, PlanResponse)
         approaches = parsed.approaches[: run_cfg.max_approaches]
+
+        if len(approaches) < run_cfg.max_approaches:
+            retry_prompt = self._build_final_prompt(
+                run_cfg,
+                research_findings,
+                required_approaches=run_cfg.max_approaches,
+            )
+            retry_raw = await self.llm_server.generate.remote.aio(
+                prompt=retry_prompt,
+                schema=schema,
+                max_tokens=1700,
+                temperature=0.2,
+            )
+            retry_parsed = parse_model_output(retry_raw, PlanResponse)
+            retry_approaches = retry_parsed.approaches[: run_cfg.max_approaches]
+            if len(retry_approaches) >= len(approaches):
+                approaches = retry_approaches
         logger.info(
             "plan_final_decision_ready",
             extra={

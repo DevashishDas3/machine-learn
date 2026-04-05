@@ -64,10 +64,10 @@ class Settings:
     llm_enforce_eager: bool = _env_bool("LLM_ENFORCE_EAGER", True)
     llm_quantization: str = os.getenv("LLM_QUANTIZATION", "")
 
-    max_approaches: int = _env_int("MAX_APPROACHES", 3)
-    max_parallel_agents: int = _env_int("MAX_PARALLEL_AGENTS", 4)
+    max_approaches: int = _env_int("MAX_APPROACHES", 5)
+    max_parallel_agents: int = _env_int("MAX_PARALLEL_AGENTS", 5)
     llm_concurrent_requests: int = _env_int("LLM_CONCURRENT_REQUESTS", 15)
-    max_tuning_iterations: int = _env_int("MAX_TUNING_ITERATIONS", 1)
+    max_tuning_iterations: int = _env_int("MAX_TUNING_ITERATIONS", 3)
     max_train_fix_attempts: int = _env_int("MAX_TRAIN_FIX_ATTEMPTS", 3)
     max_run_budget_usd: float = _env_float("MAX_RUN_BUDGET_USD", 50.0)
 
