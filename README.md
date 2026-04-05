@@ -2,6 +2,10 @@
 
 Automated ML approach planning, implementation, tuning, and reporting on Modal GPU infrastructure with a Supabase-backed realtime dashboard.
 
+## Agent Flow
+
+![Agent Flowchart](./machine-learn-flowchart.png)
+
 ## Project layout
 
 ```
