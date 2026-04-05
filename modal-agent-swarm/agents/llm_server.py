@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
-import uuid
-from typing import Any, Dict, Optional
 
 import modal
 
 from config import SETTINGS
-from modal_app import app, llm_image
 
 
 def _vllm_quantization() -> str | None:
@@ -68,93 +65,17 @@ def _load_diagnostics() -> None:
         print(f"[llmserver] {ln}", file=sys.stderr, flush=True)
 
 
-@app.cls(
-    image=llm_image,
-    gpu=SETTINGS.llm_gpu,
-    timeout=SETTINGS.plan_timeout_seconds,
-    startup_timeout=SETTINGS.llm_startup_timeout_seconds,
-    min_containers=1,
-    max_containers=1,
-)
-@modal.concurrent(max_inputs=SETTINGS.llm_concurrent_requests)
-class LLMServer:
-    """vLLM inference server using AsyncLLMEngine for concurrent request handling.
-
-    A single GPU container handles all concurrent generate() calls through
-    vLLM's continuous batching.
-    """
-
-    @modal.enter()
-    def load(self) -> None:
-        _load_diagnostics()
-        from vllm.engine.arg_utils import AsyncEngineArgs
-        from vllm.engine.async_llm_engine import AsyncLLMEngine
-
-        kwargs: dict = {
-            "model": SETTINGS.llm_model_primary,
-            "trust_remote_code": True,
-            "max_model_len": SETTINGS.llm_max_model_len,
-            "gpu_memory_utilization": SETTINGS.llm_gpu_memory_utilization,
-            "enforce_eager": SETTINGS.llm_enforce_eager,
-        }
-        q = _vllm_quantization()
-        if q:
-            kwargs["quantization"] = q
-        print(
-            f"[llmserver] AsyncLLMEngine(**kwargs) keys={sorted(kwargs.keys())} "
-            f"quantization_in_kwargs={'quantization' in kwargs}",
-            file=sys.stderr,
-            flush=True,
-        )
-        engine_args = AsyncEngineArgs(**kwargs)
-        self.engine = AsyncLLMEngine.from_engine_args(engine_args)
-
-    @modal.method()
-    async def generate(
-        self,
-        prompt: str,
-        schema: Optional[Dict[str, Any]] = None,
-        temperature: float = 0.2,
-        max_tokens: int = 1024,
-    ) -> str:
-        from vllm import SamplingParams
-        from vllm.sampling_params import StructuredOutputsParams
-
-        structured = StructuredOutputsParams(json=schema) if schema else None
-        params = SamplingParams(
-            temperature=temperature,
-            max_tokens=max_tokens,
-            repetition_penalty=1.15,
-            frequency_penalty=0.1,
-            structured_outputs=structured,
-        )
-        request_id = uuid.uuid4().hex
-        final_output = None
-        async for output in self.engine.generate(prompt, params, request_id):
-            final_output = output
-        return final_output.outputs[0].text
-
-
 def get_llm_server_handle():
-    if SETTINGS.llm_use_deployed_service:
-        try:
-            deployed_cls = modal.Cls.from_name(
-                SETTINGS.llm_service_app_name,
-                SETTINGS.llm_service_class_name,
-                environment_name=SETTINGS.modal_environment,
-            )
-            return deployed_cls()
-        except Exception as exc:  # noqa: BLE001
-            if not SETTINGS.llm_allow_local_fallback:
-                raise RuntimeError(
-                    "Failed to bind deployed LLM service and local fallback is disabled. "
-                    f"app={SETTINGS.llm_service_app_name} class={SETTINGS.llm_service_class_name} "
-                    f"env={SETTINGS.modal_environment} err={exc!r}"
-                ) from exc
-            print(
-                f"[llmserver] using local class fallback; failed to bind deployed cls: {exc!r}",
-                file=sys.stderr,
-                flush=True,
-            )
-            return LLMServer()
-    return LLMServer()
+    try:
+        deployed_cls = modal.Cls.from_name(
+            SETTINGS.llm_service_app_name,
+            SETTINGS.llm_service_class_name,
+            environment_name=SETTINGS.modal_environment,
+        )
+        return deployed_cls()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "Failed to bind deployed LLM service. "
+            f"app={SETTINGS.llm_service_app_name} class={SETTINGS.llm_service_class_name} "
+            f"env={SETTINGS.modal_environment} err={exc!r}"
+        ) from exc
