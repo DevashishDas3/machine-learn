@@ -605,7 +605,7 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
             }
           });
           composer.render();
-        } else renderer.render(scene, camera);
+        } else if (renderer && scene && camera) renderer.render(scene, camera);
         raf = requestAnimationFrame(animate);
       };
       raf = requestAnimationFrame(animate);
