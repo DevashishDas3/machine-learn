@@ -24,6 +24,8 @@ Rules:
 - Do NOT add redundant inline comments. Do NOT repeat comments. Keep code clean and minimal.
 - NEVER append multiple trailing comments to a single line of code. No # noqa, # pylint, or # flake8 comments.
 - NEVER make network calls of any kind (no urllib, requests, socket connections, download=True, etc.).
+- Write robust code that can survive one or more repair rounds from runtime feedback.
+- Prefer defensive checks with clear ValueError messages for shape/schema mismatch.
 
 Data loading requirements:
 - Import and use: from utils.data_loader import load_dataset
@@ -38,6 +40,8 @@ Data loading requirements:
 - Do NOT drop label columns from `X` again.
 - Do NOT force `X` into a pandas DataFrame with `payload["schema"]` unless column count exactly matches.
 - If `len(payload["schema"]) != X.shape[1]`, ignore schema for DataFrame construction and proceed with raw `X`.
+- If you build a DataFrame from `X`, ensure columns length exactly equals `X.shape[1]`.
+- If `X` is already a DataFrame-like object after loading, do not wrap it again with mismatched columns.
 
 Imports — CRITICAL RULES:
 - Every name you use must be imported. NEVER use a name that is not explicitly imported at the top.
@@ -93,6 +97,12 @@ For framework "sklearn":
 - Convert features to float32 when appropriate.
 - Ensure labels are int64 / compatible with sklearn classifiers for classification.
 - Do NOT save checkpoints — return model_checkpoint_path as an empty string "".
+- For tabular data, a safe baseline path is:
+  1) convert X/y to numpy,
+  2) train_test_split,
+  3) fit model,
+  4) compute accuracy,
+  5) return metrics.
 - When constructing sklearn models, ONLY pass the parameters that model's __init__ accepts.
   Example for LogisticRegression:
     solver = str(hyper.get("solver", "lbfgs"))

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+from hashlib import sha1
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from config import SETTINGS
 from modal_app import app, data_volume, train_image
@@ -14,6 +15,18 @@ from utils.volume_utils import ensure_run_dirs, write_json
 
 _MAX_CODEGEN_RETRIES = 2
 _MAX_FIX_COMPILE_RETRIES = 2
+_MAX_AGENTIC_FIX_ROUNDS = 3
+
+
+def _snip(text: str, limit: int = 1200) -> str:
+    clean = " ".join((text or "").split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 3] + "..."
+
+
+def _fingerprint(code: str) -> str:
+    return sha1(code.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
 def _select_dataset_hints(
@@ -204,8 +217,9 @@ class ImplementationAgent:
         runtime_error: str,
         hyperparameters: Optional[Dict[str, Any]] = None,
         logs_excerpt: Optional[str] = None,
+        failure_history: Optional[List[str]] = None,
     ) -> str:
-        """Regenerate training code after a failed execution (runtime or invalid output)."""
+        """Regenerate training code after a failed execution with iterative repairs."""
         hp = (
             hyperparameters if hyperparameters is not None else approach.hyperparameters
         )
@@ -217,25 +231,53 @@ class ImplementationAgent:
             f"Approach:\n{approach.model_dump_json(indent=2)}\n\n"
             f"Hyperparameters in effect:\n{json.dumps(hp, indent=2)}\n"
         )
+        history_lines = [
+            f"- {idx + 1}. {_snip(item, 500)}"
+            for idx, item in enumerate((failure_history or [])[-8:])
+            if item
+        ]
         fix_intro = (
             "\n\n=== FIX FAILED TRAINING RUN ===\n"
+            "You are operating as an iterative coding agent.\n"
             "The code below was executed and failed. Fix the bug(s) so train() runs successfully.\n"
             "Preserve the same train(payload: dict) -> dict contract and output rules.\n\n"
             f"Runtime error:\n{runtime_error}\n"
         )
+        if history_lines:
+            fix_intro += "\nFailure history (oldest to newest):\n" + "\n".join(
+                history_lines
+            )
         if logs_excerpt and logs_excerpt.strip():
             fix_intro += f"\nLog output (excerpt):\n{logs_excerpt[:6000]}\n"
+        fix_intro += (
+            "\nCritical debugging requirements:\n"
+            "- Read payload keys exactly as specified.\n"
+            "- load_dataset() already returns X and y; do not remove labels from X again.\n"
+            "- If building a DataFrame from X and schema, only do so when len(schema) == X.shape[1].\n"
+            "- If prior fixes repeated the same failure, choose a substantially different fix strategy.\n"
+        )
         fix_intro += f"\nFailed code to correct:\n\n{failed_code}\n"
 
         last_code = failed_code
-        for attempt in range(_MAX_FIX_COMPILE_RETRIES + 1):
-            prompt = base_prompt + fix_intro
-            if attempt > 0 and last_code:
+        seen_fingerprints = {_fingerprint(failed_code)}
+        for round_idx in range(1, _MAX_AGENTIC_FIX_ROUNDS + 1):
+            prompt = (
+                base_prompt
+                + fix_intro
+                + f"\n\nRepair round {round_idx}/{_MAX_AGENTIC_FIX_ROUNDS}."
+                + " Return the COMPLETE corrected Python file only."
+            )
+            if round_idx > 1 and last_code:
                 compile_err = _compile_check(last_code)
                 if compile_err:
                     prompt += (
                         f"\n\nYour previous fix failed to compile:\n{compile_err}\n"
                         f"Return the COMPLETE corrected code.\n"
+                    )
+                else:
+                    prompt += (
+                        "\n\nYour previous fix still failed at runtime. "
+                        "Apply a different debugging approach and return full corrected code.\n"
                     )
             try:
                 raw = await self.llm_server.generate.remote.aio(
@@ -246,10 +288,15 @@ class ImplementationAgent:
                 code = _sanitize_generated_code(raw)
                 compile_err = _compile_check(code)
                 if compile_err is None:
+                    fp = _fingerprint(code)
+                    if fp in seen_fingerprints and round_idx < _MAX_AGENTIC_FIX_ROUNDS:
+                        last_code = code
+                        continue
+                    seen_fingerprints.add(fp)
                     return code
                 last_code = code
             except Exception:  # noqa: BLE001
-                if attempt == _MAX_FIX_COMPILE_RETRIES:
+                if round_idx == _MAX_AGENTIC_FIX_ROUNDS:
                     return _sanitize_generated_code(last_code)
         return _sanitize_generated_code(last_code) if last_code else failed_code
 

@@ -413,6 +413,7 @@ async def _run_pipeline(
             code = generated_code_by_name.get(approach.name, FALLBACK_TRAIN_CODE)
             max_fix = max(1, run_cfg.max_train_fix_attempts)
             last_result: TrainingResult | None = None
+            failure_history: List[str] = []
 
             for fix_i in range(max_fix):
                 if fix_i == 0:
@@ -468,6 +469,8 @@ async def _run_pipeline(
                     generated_code_by_name[approach.name] = code
                     return last_result
 
+                failure_history.append(last_result.error or "unknown training error")
+
                 if fix_i >= max_fix - 1:
                     generated_code_by_name[approach.name] = code
                     return last_result
@@ -482,6 +485,7 @@ async def _run_pipeline(
                         runtime_error=last_result.error or "",
                         hyperparameters=hp_override,
                         logs_excerpt=last_result.logs_excerpt,
+                        failure_history=failure_history,
                     )
                     generated_code_by_name[approach.name] = code
                 except Exception as exc:  # noqa: BLE001
