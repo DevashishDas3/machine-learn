@@ -18,7 +18,7 @@ Operational guide for coding agents working in this repository.
 ## Repository map
 
 - `orchestrator.py`: main async pipeline (`Plan -> Implement -> Tune -> Report`)
-- `start_dashboard_run.py`: dashboard launcher that creates run rows, uploads files to Modal Volume, and starts orchestrator
+- `dashboard_launcher_service.py`: local FastAPI launcher that creates run rows, uploads files to Modal Volume, and spawns orchestrator via Modal SDK
 - `modal_app.py`: Modal app/resources and function images
 - `llm_service.py`: deployed shared LLM service app (`ml-agent-llm-service`)
 - `agents/`: plan/implementation/tuning/report agents + shared LLM server
@@ -81,13 +81,14 @@ Use these exact commands unless you intentionally need a variant.
 
 ### Dashboard run-start flow (local)
 
+- Start local launcher service:
+  - `modal-agent-swarm/dashboard_launcher_service.py`
+  - run with `uv run python dashboard_launcher_service.py` (or `python dashboard_launcher_service.py`)
 - Start API route:
   - `dashboard-next/src/app/api/runs/start/route.ts`
-- Python launcher invoked by API route:
-  - `modal-agent-swarm/start_dashboard_run.py`
-- Optional local env overrides for launcher process:
-  - `DASHBOARD_BACKEND_DIR` (path to `modal-agent-swarm`)
-  - `PYTHON_BIN` (explicit Python executable)
+  - forwards dashboard form data to launcher service
+- Optional local env override:
+  - `DASHBOARD_LAUNCHER_URL` (default `http://127.0.0.1:8001/start-run`)
 
 ### Lint status
 

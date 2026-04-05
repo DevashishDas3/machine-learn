@@ -31,7 +31,8 @@ With labels path:
 From Next.js dashboard (recommended local flow):
 
 - Use `/dashboard` "Start New Run" form to upload dataset + labels + task prompt.
-- Backend route `dashboard-next/src/app/api/runs/start/route.ts` invokes `start_dashboard_run.py`.
+- Backend route `dashboard-next/src/app/api/runs/start/route.ts` forwards to `dashboard_launcher_service.py`.
+- Launcher service uses Modal Python SDK for file upload and background run spawn (no shelling to `modal run`/`modal volume put`).
 
 ## 4) Monitor
 
@@ -60,8 +61,8 @@ Download run summary:
 - **Implementation phase fails**: inspect `/logs/<approach>.log`; generated code may not satisfy `train(payload)->dict`.
 - **Budget rejection**: lower `MAX_APPROACHES`, `MAX_TUNING_ITERATIONS`, or choose cheaper GPUs.
 - **Volume visibility issues**: ensure producer functions call `commit()` and consumer functions call `reload()`.
-- **Dashboard launcher python not found**: set `PYTHON_BIN` in `dashboard-next/.env.local` or ensure `uv` is installed.
-- **Dashboard API 500**: inspect JSON response fields `error`, `details`, `triedPython`, `backendDir`, `launcherPath`.
+- **Dashboard launcher service unreachable**: verify `dashboard_launcher_service.py` is running and `DASHBOARD_LAUNCHER_URL` is correct.
+- **Dashboard API 500**: inspect JSON response fields `error`, `details`, and `launcherUrl`.
 
 ## 7) Smoke validation recipe
 
