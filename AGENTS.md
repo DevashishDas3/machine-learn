@@ -18,7 +18,7 @@ Operational guide for coding agents working in this repository.
 ## Repository map
 
 - `orchestrator.py`: main async pipeline (`Plan -> Implement -> Tune -> Report`)
-- `start_dashboard_run.py`: dashboard launcher that creates run rows, uploads files to Modal Volume, and starts orchestrator
+- `dashboard_launcher_service.py`: local FastAPI launcher that creates run rows, uploads files to Modal Volume, and spawns orchestrator via Modal SDK
 - `modal_app.py`: Modal app/resources and function images
 - `llm_service.py`: deployed shared LLM service app (`ml-agent-llm-service`)
 - `agents/`: plan/implementation/tuning/report agents + shared LLM server
