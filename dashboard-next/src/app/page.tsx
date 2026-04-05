@@ -20,7 +20,7 @@ export default function LandingPage() {
       <Navbar />
 
       {/* Hero Section */}
-      <section className="relative flex min-h-screen flex-col items-center justify-center px-6 pt-14">
+      <section className="relative flex min-h-screen flex-col items-center justify-center px-6 pt-40">
         {/* Three.js Pipeline Background */}
         <SwarmPipelineCanvas />
 
@@ -35,7 +35,7 @@ export default function LandingPage() {
           className="relative z-10 text-center"
         >
           {/* Main Headline - Massive Logo */}
-          <h1 className="mb-6 font-mono text-5xl font-bold leading-none tracking-tight text-paper md:text-7xl lg:text-8xl">
+          <h1 className="mb-6= font-mono text-5xl font-bold leading-none tracking-tight text-paper md:text-7xl lg:text-8xl">
             <span className="text-azure">machine</span>
             <span className="text-paper/60">(</span>
             <span className="text-paper">learn</span>
