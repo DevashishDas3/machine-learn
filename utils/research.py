@@ -23,7 +23,9 @@ def _safe_json_get(url: str, timeout_seconds: float = 8.0) -> Any:
             "User-Agent": "ml-agent-swarm/1.0",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+    with urllib.request.urlopen(
+        request, timeout=timeout_seconds
+    ) as response:  # noqa: S310
         raw = response.read().decode("utf-8", errors="replace")
     return json.loads(raw)
 
@@ -36,7 +38,9 @@ def _safe_text_get(url: str, timeout_seconds: float = 8.0) -> str:
             "User-Agent": "ml-agent-swarm/1.0",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+    with urllib.request.urlopen(
+        request, timeout=timeout_seconds
+    ) as response:  # noqa: S310
         return response.read().decode("utf-8", errors="replace")
 
 
@@ -86,7 +90,9 @@ def _from_arxiv(query: str, max_results: int) -> List[Dict[str, Any]]:
 
     papers: List[Dict[str, Any]] = []
     for entry in root.findall("atom:entry", ns):
-        title = _normalize_space(entry.findtext("atom:title", default="", namespaces=ns))
+        title = _normalize_space(
+            entry.findtext("atom:title", default="", namespaces=ns)
+        )
         if not title:
             continue
         summary = _normalize_space(
@@ -113,7 +119,9 @@ def _from_arxiv(query: str, max_results: int) -> List[Dict[str, Any]]:
     return papers
 
 
-def _dedupe_and_rank(papers: List[Dict[str, Any]], max_results: int) -> List[Dict[str, Any]]:
+def _dedupe_and_rank(
+    papers: List[Dict[str, Any]], max_results: int
+) -> List[Dict[str, Any]]:
     deduped: Dict[str, Dict[str, Any]] = {}
     for paper in papers:
         key = _normalize_space(str(paper.get("title", "")).lower())

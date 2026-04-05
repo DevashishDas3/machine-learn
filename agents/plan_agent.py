@@ -94,7 +94,9 @@ class PlanAgent:
             return
 
     @staticmethod
-    def _build_research_digest(research_findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _build_research_digest(
+        research_findings: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
         unique_sources = sorted(
             {
                 str(source)
@@ -105,7 +107,9 @@ class PlanAgent:
         )
         return {
             "rounds_completed": len(research_findings),
-            "total_papers": sum(int(f.get("paper_count", 0)) for f in research_findings),
+            "total_papers": sum(
+                int(f.get("paper_count", 0)) for f in research_findings
+            ),
             "queries": [str(f.get("query", "")) for f in research_findings],
             "sources": unique_sources,
         }
