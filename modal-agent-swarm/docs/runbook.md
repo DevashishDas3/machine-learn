@@ -57,7 +57,7 @@ Download run summary:
 ## 6) Failure triage
 
 - **Plan phase fails**: validate LLM server availability and schema output.
-- **Unexpected local LLM startup**: verify `LLM_USE_DEPLOYED_SERVICE=true` and `LLM_ALLOW_LOCAL_FALLBACK=false`, and that `llm_service.py` is deployed.
+- **LLM bind failures**: ensure `llm_service.py` is deployed and reachable as `LLM_SERVICE_APP_NAME`/`LLM_SERVICE_CLASS_NAME`; the swarm app no longer hosts a local `LLMServer` fallback.
 - **Implementation phase fails**: inspect `/logs/<approach>.log`; generated code may not satisfy `train(payload)->dict`.
 - **Budget rejection**: lower `MAX_APPROACHES`, `MAX_TUNING_ITERATIONS`, or choose cheaper GPUs.
 - **Volume visibility issues**: ensure producer functions call `commit()` and consumer functions call `reload()`.
