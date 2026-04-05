@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { createBrowserSupabaseClient } from "@/lib/supabase-client";
 import { formatTs } from "@/lib/utils";
@@ -105,6 +105,38 @@ function SendIcon({ className = "" }: { className?: string }) {
   );
 }
 
+function UploadIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+    </svg>
+  );
+}
+
+function NewChatIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+    </svg>
+  );
+}
+
+function ChevronLeftIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+    </svg>
+  );
+}
+
 // ============================================
 // Phase Badge Component
 // ============================================
@@ -131,7 +163,60 @@ function PhaseBadge({ phase }: { phase: string }) {
 }
 
 // ============================================
-// Empty State Component
+// Awaiting Command Empty State
+// ============================================
+
+function AwaitingCommandState() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-center px-8">
+      <pre className="text-azure/40 text-[10px] leading-tight font-mono mb-8 select-none">
+{`
+   ╭──────────────────────────────────────╮
+   │                                      │
+   │     ▄▄▄  ▄▄▄▄▄  ▄▄▄▄▄  ▄   ▄  ▄▄▄    │
+   │     █▄▄█ █   ▀  █   ▀  █▀▄▀█  █▄▄▀   │
+   │     █  █ █▀▀    █▀▀    █   █  █ ▀▄   │
+   │     ▀  ▀ ▀▀▀▀▀  ▀▀▀▀▀  ▀   ▀  ▀  ▀▀  │
+   │                                      │
+   │        SWARM ORCHESTRATOR            │
+   │                                      │
+   ╰──────────────────────────────────────╯
+`}
+      </pre>
+      
+      <div className="font-mono space-y-3 max-w-md">
+        <p className="text-2xl text-paper tracking-tight">
+          {">"} system.ready()
+        </p>
+        <p className="text-sm text-paper/40 leading-relaxed">
+          Describe your ML task below to initiate the agent swarm.
+          <br />
+          Upload a dataset or specify a path on Modal Volume.
+        </p>
+      </div>
+
+      <div className="mt-12 grid grid-cols-3 gap-4 text-left max-w-xl">
+        {[
+          { label: "PlanAgent", desc: "Architecture selection" },
+          { label: "ImplementAgent", desc: "A100/H100 training" },
+          { label: "TuneAgent", desc: "Hyperparameter search" },
+        ].map((item) => (
+          <div key={item.label} className="border border-white/10 p-3">
+            <p className="font-mono text-[10px] text-azure uppercase tracking-wider">
+              {item.label}
+            </p>
+            <p className="font-mono text-[10px] text-paper/30 mt-1">
+              {item.desc}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================
+// Empty Runs State (for sidebar)
 // ============================================
 
 function EmptyState() {
@@ -671,6 +756,13 @@ export default function DashboardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [showReport, setShowReport] = useState(false);
+  
+  // New states for ChatGPT-style UI
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [inputValue, setInputValue] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Get current user
   useEffect(() => {
@@ -701,15 +793,12 @@ export default function DashboardPage() {
         console.error("Error loading runs:", error);
       } else {
         setRuns(data || []);
-        if (data && data.length > 0 && !selectedRunId) {
-          setSelectedRunId(data[0].id);
-        }
       }
       setIsLoading(false);
     };
 
     loadRuns();
-  }, [userId, supabase, selectedRunId]);
+  }, [userId, supabase]);
 
   // Subscribe to realtime updates
   useEffect(() => {
@@ -732,6 +821,8 @@ export default function DashboardPage() {
           if (payload.eventType === "INSERT") {
             const newRun = payload.new as SwarmRun;
             setRuns((prev) => [newRun, ...prev]);
+            // Auto-select new run
+            setSelectedRunId(newRun.id);
           } else if (payload.eventType === "UPDATE") {
             const updatedRun = payload.new as SwarmRun;
             setRuns((prev) =>
@@ -767,121 +858,319 @@ export default function DashboardPage() {
     }
   }, [selectedRunId, runs]);
 
+  // Handle new task submission
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputValue.trim() || !userId || isSubmitting) return;
+
+    setIsSubmitting(true);
+    try {
+      // Create a new run in Supabase
+      const runName = inputValue.length > 50 
+        ? inputValue.slice(0, 47) + "..." 
+        : inputValue;
+      
+      const { data, error } = await supabase
+        .from("swarm_runs")
+        .insert({
+          user_id: userId,
+          name: runName,
+          status: "pending",
+          current_phase: "prepare_dataset",
+          flowchart_data: {
+            stages: [
+              { id: "prepare_dataset", label: "Prepare Dataset", status: "pending" },
+              { id: "load_modal", label: "Load to Modal Volume", status: "pending" },
+              { id: "plan_agent", label: "PlanAgent", status: "pending" },
+              { id: "implement_agent", label: "ImplementationAgent", status: "pending" },
+              { id: "tune_agent", label: "TuningAgent", status: "pending" },
+              { id: "report_agent", label: "ReportAgent", status: "pending" },
+            ],
+            connections: [
+              { from: "prepare_dataset", to: "load_modal", active: false },
+              { from: "load_modal", to: "plan_agent", active: false },
+              { from: "plan_agent", to: "implement_agent", active: false },
+              { from: "implement_agent", to: "tune_agent", active: false },
+              { from: "tune_agent", to: "report_agent", active: false },
+            ],
+          },
+          chat_messages: [
+            {
+              id: crypto.randomUUID(),
+              role: "user",
+              content: inputValue,
+              timestamp: new Date().toISOString(),
+            },
+            {
+              id: crypto.randomUUID(),
+              role: "system",
+              content: "Initializing ML agent swarm...",
+              timestamp: new Date().toISOString(),
+              stage: "prepare_dataset",
+            },
+          ],
+          final_report: null,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error("Error creating run:", error);
+      } else if (data) {
+        setSelectedRunId(data.id);
+        setInputValue("");
+        setUploadedFile(null);
+      }
+    } catch (err) {
+      console.error("Error submitting task:", err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Start a new chat (deselect current run)
+  const handleNewChat = () => {
+    setSelectedRunId(null);
+    setCurrentRun(null);
+    setInputValue("");
+  };
+
+  // Handle file upload
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setUploadedFile(file);
+    }
+  };
+
   const isRunning = currentRun?.status === "running";
   const currentPhase = currentRun?.current_phase || "pending";
   const chatMessages = currentRun?.chat_messages || [];
 
   return (
     <div className="flex h-screen overflow-hidden bg-obsidian">
-      {/* Sidebar */}
-      <aside className="w-56 shrink-0 border-r border-white/10 flex flex-col">
-        {/* Sidebar Header */}
-        <div className="px-4 py-4 border-b border-white/10">
-          <span className="font-mono text-sm">
-            <span className="text-azure">machine</span>
-            <span className="text-paper/60">(</span>
-            <span className="text-paper">learn</span>
-            <span className="text-paper/60">);</span>
-          </span>
-        </div>
-
-        {/* Runs List */}
-        <div className="flex-1 overflow-y-auto py-2">
-          <p className="px-4 py-2 font-mono text-[10px] uppercase tracking-widest text-paper/40">
-            Swarm Runs
-          </p>
-          {isLoading ? (
-            <div className="px-4 flex items-center gap-2">
-              <SpinnerIcon className="w-3 h-3 text-azure" />
-              <span className="font-mono text-xs text-paper/30">Loading...</span>
-            </div>
-          ) : runs.length === 0 ? (
-            <p className="px-4 font-mono text-xs text-paper/30">No runs yet</p>
-          ) : (
-            runs.map((run) => (
-              <button
-                key={run.id}
-                onClick={() => setSelectedRunId(run.id)}
-                className={`w-full text-left px-4 py-2 font-mono text-xs transition-colors truncate ${
-                  run.id === selectedRunId
-                    ? "bg-azure/10 text-azure border-l-2 border-l-azure"
-                    : "text-paper/60 hover:text-paper hover:bg-white/5 border-l-2 border-l-transparent"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <div
-                    className={`w-1.5 h-1.5 shrink-0 ${
-                      run.status === "running"
-                        ? "bg-azure animate-pulse"
-                        : run.status === "complete"
-                        ? "bg-green-500"
-                        : run.status === "error"
-                        ? "bg-red-500"
-                        : "bg-white/20"
-                    }`}
-                  />
-                  <span className="truncate">{run.name || run.id.slice(0, 8)}</span>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
-
-        {/* Sidebar Footer */}
-        <div className="px-4 py-3 border-t border-white/10">
-          <a
-            href="/"
-            className="font-mono text-[10px] uppercase tracking-widest text-paper/40 hover:text-paper transition-colors"
+      {/* Collapsible Sidebar */}
+      <AnimatePresence initial={false}>
+        {sidebarOpen && (
+          <motion.aside
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 260, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeInOut" }}
+            className="shrink-0 border-r border-white/10 flex flex-col overflow-hidden"
           >
-            ← Home
-          </a>
-        </div>
-      </aside>
-
-      {/* Main Content - Split View */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top Header */}
-        <header className="shrink-0 border-b border-white/10 px-6 py-3 flex items-center justify-between">
-          {/* Breadcrumbs */}
-          <div className="flex items-center gap-2 font-mono text-xs">
-            <span className="text-paper/40">Runs</span>
-            <span className="text-paper/20">/</span>
-            <span className="text-paper">
-              {currentRun?.name || selectedRunId?.slice(0, 8) || "—"}
-            </span>
-          </div>
-
-          {/* Controls */}
-          <div className="flex items-center gap-4">
-            {lastUpdated && (
-              <span className="font-mono text-[10px] text-paper/40">
-                {formatTs(lastUpdated.toISOString())}
+            {/* Sidebar Header */}
+            <div className="px-4 py-4 border-b border-white/10 flex items-center justify-between">
+              <span className="font-mono text-sm">
+                <span className="text-azure">machine</span>
+                <span className="text-paper/60">(</span>
+                <span className="text-paper">learn</span>
+                <span className="text-paper/60">);</span>
               </span>
-            )}
+            </div>
 
-            {/* Status Indicator */}
-            {isRunning && (
-              <div className="flex items-center gap-2 px-3 py-1.5 border border-azure text-azure">
-                <SpinnerIcon className="w-3 h-3" />
-                <span className="font-mono text-[10px] uppercase tracking-widest">
-                  LIVE
+            {/* New Chat Button */}
+            <div className="px-3 py-3 border-b border-white/10">
+              <button
+                onClick={handleNewChat}
+                className="w-full flex items-center gap-2 px-3 py-2 border border-white/10 font-mono text-xs text-paper/80 hover:text-paper hover:bg-white/5 transition-colors"
+              >
+                <NewChatIcon className="w-4 h-4" />
+                <span>New Task</span>
+              </button>
+            </div>
+
+            {/* Runs List */}
+            <div className="flex-1 overflow-y-auto py-2">
+              <p className="px-4 py-2 font-mono text-[10px] uppercase tracking-widest text-paper/40">
+                History
+              </p>
+              {isLoading ? (
+                <div className="px-4 flex items-center gap-2">
+                  <SpinnerIcon className="w-3 h-3 text-azure" />
+                  <span className="font-mono text-xs text-paper/30">Loading...</span>
+                </div>
+              ) : runs.length === 0 ? (
+                <p className="px-4 font-mono text-xs text-paper/30">No runs yet</p>
+              ) : (
+                runs.map((run) => (
+                  <button
+                    key={run.id}
+                    onClick={() => setSelectedRunId(run.id)}
+                    className={`w-full text-left px-4 py-2.5 font-mono text-xs transition-colors ${
+                      run.id === selectedRunId
+                        ? "bg-white/10 text-paper border-l-2 border-l-azure"
+                        : "text-paper/60 hover:text-paper hover:bg-white/5 border-l-2 border-l-transparent"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div
+                        className={`w-1.5 h-1.5 shrink-0 ${
+                          run.status === "running"
+                            ? "bg-azure animate-pulse"
+                            : run.status === "complete"
+                            ? "bg-green-500"
+                            : run.status === "error"
+                            ? "bg-red-500"
+                            : "bg-white/20"
+                        }`}
+                      />
+                      <span className="truncate flex-1">{run.name || run.id.slice(0, 8)}</span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-paper/30 truncate pl-3.5">
+                      {new Date(run.created_at).toLocaleDateString()}
+                    </p>
+                  </button>
+                ))
+              )}
+            </div>
+
+            {/* Sidebar Footer */}
+            <div className="px-4 py-3 border-t border-white/10 flex items-center justify-between">
+              <a
+                href="/"
+                className="font-mono text-[10px] uppercase tracking-widest text-paper/40 hover:text-paper transition-colors"
+              >
+                ← Home
+              </a>
+              {lastUpdated && (
+                <span className="font-mono text-[9px] text-paper/30">
+                  {formatTs(lastUpdated.toISOString())}
                 </span>
-              </div>
-            )}
+              )}
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
-            {/* Phase Badge */}
-            {currentRun && <PhaseBadge phase={currentPhase} />}
-          </div>
-        </header>
-
-        {/* Split View Content */}
-        {!currentRun ? (
-          <main className="flex-1 overflow-y-auto">
-            <EmptyState />
-          </main>
+      {/* Sidebar Toggle Button */}
+      <button
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+        className="absolute left-0 top-1/2 -translate-y-1/2 z-10 border border-white/10 border-l-0 bg-obsidian px-1 py-3 font-mono text-[10px] text-paper/40 hover:text-paper hover:bg-white/5 transition-colors"
+        style={{ left: sidebarOpen ? 260 : 0 }}
+      >
+        {sidebarOpen ? (
+          <ChevronLeftIcon className="w-3 h-3" />
         ) : (
+          <ChevronRightIcon className="w-3 h-3" />
+        )}
+      </button>
+
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col overflow-hidden relative">
+        {/* Header - only show when a run is active */}
+        {currentRun && (
+          <header className="shrink-0 border-b border-white/10 px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2 font-mono text-xs">
+              <span className="text-paper/40">Run</span>
+              <span className="text-paper/20">/</span>
+              <span className="text-paper truncate max-w-[300px]">
+                {currentRun.name || selectedRunId?.slice(0, 8)}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-4">
+              {isRunning && (
+                <div className="flex items-center gap-2 px-3 py-1.5 border border-azure text-azure">
+                  <SpinnerIcon className="w-3 h-3" />
+                  <span className="font-mono text-[10px] uppercase tracking-widest">
+                    LIVE
+                  </span>
+                </div>
+              )}
+              <PhaseBadge phase={currentPhase} />
+            </div>
+          </header>
+        )}
+
+        {/* Main Content */}
+        {!currentRun ? (
+          /* Empty State - Awaiting Command */
+          <div className="flex-1 flex flex-col">
+            <div className="flex-1 overflow-y-auto">
+              <AwaitingCommandState />
+            </div>
+
+            {/* Command Input - Bottom Center */}
+            <div className="shrink-0 px-4 pb-6 pt-2">
+              <div className="max-w-3xl mx-auto">
+                <form onSubmit={handleSubmit}>
+                  <div className="border border-white/10 bg-[#11181C]">
+                    {/* File upload indicator */}
+                    {uploadedFile && (
+                      <div className="px-4 py-2 border-b border-white/10 flex items-center justify-between">
+                        <span className="font-mono text-xs text-azure">
+                          {uploadedFile.name}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setUploadedFile(null)}
+                          className="text-paper/40 hover:text-paper"
+                        >
+                          <XIcon className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center">
+                      {/* Upload Button */}
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleFileChange}
+                        accept=".csv,.json,.parquet,.idx3-ubyte"
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-4 py-4 text-paper/40 hover:text-paper border-r border-white/10 transition-colors"
+                        title="Upload dataset"
+                      >
+                        <UploadIcon className="w-5 h-5" />
+                      </button>
+
+                      {/* Input Field */}
+                      <input
+                        type="text"
+                        value={inputValue}
+                        onChange={(e) => setInputValue(e.target.value)}
+                        placeholder="> Describe your ML task..."
+                        disabled={isSubmitting}
+                        className="flex-1 px-4 py-4 bg-transparent font-mono text-sm text-paper placeholder:text-paper/30 focus:outline-none"
+                      />
+
+                      {/* Submit Button */}
+                      <button
+                        type="submit"
+                        disabled={!inputValue.trim() || isSubmitting}
+                        className={`px-4 py-4 transition-colors ${
+                          inputValue.trim() && !isSubmitting
+                            ? "text-azure hover:bg-azure/10"
+                            : "text-paper/20 cursor-not-allowed"
+                        }`}
+                      >
+                        {isSubmitting ? (
+                          <SpinnerIcon className="w-5 h-5" />
+                        ) : (
+                          <SendIcon className="w-5 h-5" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+
+                <p className="mt-3 text-center font-mono text-[10px] text-paper/30">
+                  Type a task description and press Enter to start the agent swarm.
+                  {" "}Datasets: MNIST, CIFAR-10, or upload your own.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* Active Run View - Split Pane */
           <div className="flex-1 flex overflow-hidden">
-            {/* Left Pane - Chat */}
+            {/* Left Pane - Chat Messages */}
             <div className="w-[400px] shrink-0 border-r border-white/10 flex flex-col">
               <ChatPane messages={chatMessages} isRunning={isRunning} />
             </div>
