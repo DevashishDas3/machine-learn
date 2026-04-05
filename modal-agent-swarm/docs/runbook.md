@@ -14,9 +14,24 @@ Upload dataset into volume once:
 
 Then use `/vol/datasets/local_dataset.csv` as `dataset_path`.
 
+For IDX-style inputs, upload both files and pass both paths:
+
+`modal volume put ml-agent-swarm-data ./train-images.idx3-ubyte /datasets/train-images.idx3-ubyte`
+
+`modal volume put ml-agent-swarm-data ./train-labels.idx1-ubyte /datasets/train-labels.idx1-ubyte`
+
 ## 3) Trigger a run
 
 `modal run orchestrator.py --dataset-path /vol/datasets/local_dataset.csv --task-description "Your ML objective"`
+
+With labels path:
+
+`modal run orchestrator.py --dataset-path /vol/datasets/train-images.idx3-ubyte --labels-path /vol/datasets/train-labels.idx1-ubyte --task-description "Classify digits"`
+
+From Next.js dashboard (recommended local flow):
+
+- Use `/dashboard` "Start New Run" form to upload dataset + labels + task prompt.
+- Backend route `dashboard-next/src/app/api/runs/start/route.ts` invokes `start_dashboard_run.py`.
 
 ## 4) Monitor
 
@@ -41,9 +56,12 @@ Download run summary:
 ## 6) Failure triage
 
 - **Plan phase fails**: validate LLM server availability and schema output.
+- **Unexpected local LLM startup**: verify `LLM_USE_DEPLOYED_SERVICE=true` and `LLM_ALLOW_LOCAL_FALLBACK=false`, and that `llm_service.py` is deployed.
 - **Implementation phase fails**: inspect `/logs/<approach>.log`; generated code may not satisfy `train(payload)->dict`.
 - **Budget rejection**: lower `MAX_APPROACHES`, `MAX_TUNING_ITERATIONS`, or choose cheaper GPUs.
 - **Volume visibility issues**: ensure producer functions call `commit()` and consumer functions call `reload()`.
+- **Dashboard launcher python not found**: set `PYTHON_BIN` in `dashboard-next/.env.local` or ensure `uv` is installed.
+- **Dashboard API 500**: inspect JSON response fields `error`, `details`, `triedPython`, `backendDir`, `launcherPath`.
 
 ## 7) Smoke validation recipe
 

@@ -1,180 +1,174 @@
 # machine(learn);
 
-Automated ML approach planning, implementation, tuning, and reporting on Modal GPU infrastructure with a shared vLLM backend.
+Automated ML approach planning, implementation, tuning, and reporting on Modal GPU infrastructure with a Supabase-backed realtime dashboard.
 
-## Project Layout
+## Project layout
 
 ```
-├── modal-agent-swarm/       # Modal backend (Python)
-│   ├── modal_app.py         # Modal app and shared resource definitions
-│   ├── orchestrator.py      # 4-phase async pipeline (Plan → Implement → Tune → Report)
-│   ├── api_endpoints.py     # FastAPI endpoints for frontend integration
-│   ├── agents/              # LLM server and agent modules
-│   ├── schemas/             # Pydantic contracts for all phase handoffs
-│   ├── supabase_helpers.py  # Supabase integration for dashboard updates
-│   └── test_dashboard.py    # Test script for simulating pipeline runs
+├── modal-agent-swarm/               # Modal backend (Python)
+│   ├── orchestrator.py              # 4-phase async pipeline (Plan -> Implement -> Tune -> Report)
+│   ├── start_dashboard_run.py       # Dashboard launcher (uploads files + starts Modal run)
+│   ├── llm_service.py               # Deployed shared LLM service app (ml-agent-llm-service)
+│   ├── modal_app.py                 # Modal app/resources and shared images
+│   ├── agents/                      # Plan/impl/tuning/report agents + LLM handle binding
+│   ├── schemas/                     # Pydantic contracts for all phase handoffs
+│   ├── supabase_helpers.py          # Supabase run/update helpers for dashboard
+│   └── test_dashboard.py            # Optional fake pipeline simulator for UI testing
 │
-├── dashboard-next/          # Next.js frontend (TypeScript)
+├── dashboard-next/                  # Next.js frontend (TypeScript)
 │   └── src/app/
-│       ├── page.tsx         # Landing page
-│       ├── login/           # Email/password auth
-│       ├── signup/          # Account creation
-│       └── dashboard/       # Main ML pipeline dashboard
+│       ├── page.tsx                 # Landing page
+│       ├── login/                   # Email/password auth
+│       ├── signup/                  # Account creation
+│       ├── dashboard/               # Main ML pipeline dashboard + "Start New Run" form
+│       └── api/runs/start/route.ts  # Server route that triggers backend launcher
 │
-└── supabase/                # Database schema
-    └── migrations/          # SQL migrations
+└── supabase/
+    └── migrations/20260404_init.sql # swarm_runs schema + RLS + realtime
 ```
 
-## Quick Start
+## What works now
 
-### 1. Setup Backend (Modal)
+- Users can sign up/log in and start a run directly from the dashboard.
+- Dashboard accepts:
+  - dataset file upload
+  - labels file upload
+  - task prompt
+  - optional run name
+- Backend uploads files to Modal Volume and launches orchestrator automatically.
+- Realtime updates stream into dashboard from Supabase (`swarm_runs`).
+- Orchestrator is configured to use deployed LLM service by default and does not silently fallback.
+
+## Quick start
+
+### 1) Database (Supabase)
+
+Run the SQL in `supabase/migrations/20260404_init.sql` in Supabase SQL Editor.
+
+### 2) Backend (Modal)
 
 ```bash
 cd modal-agent-swarm
 
-# Create virtual environment
+# If using uv (recommended)
+uv sync
+
+# OR classic venv
 python -m venv .venv
 .venv\Scripts\activate  # Windows
 # source .venv/bin/activate  # macOS/Linux
-
-# Install dependencies
 pip install -r requirements.txt
-pip install supabase
 
-# Authenticate with Modal
+# Modal auth
 modal setup
 
-# Create Supabase secret
+# Create backend secret used by Modal workers
 modal secret create supabase-secrets SUPABASE_URL="https://your-project.supabase.co" SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
 
-# Deploy the API endpoint (required for frontend integration)
-modal deploy api_endpoints.py
+# Deploy shared LLM service first (recommended)
+modal deploy llm_service.py
 
-# Deploy the orchestrator
+# Deploy orchestrator app
 modal deploy orchestrator.py
 ```
 
-After deploying `api_endpoints.py`, Modal will output a URL like:
-```
-https://your-workspace--ml-agent-swarm-api.modal.run
-```
-Copy this URL for the frontend configuration.
-
-### 2. Setup Frontend (Next.js)
+### 3) Frontend (Next.js)
 
 ```bash
 cd dashboard-next
-
-# Install dependencies
 npm install
+```
 
-# Copy environment file and add your keys
-cp .env.local.example .env.local
+Create `dashboard-next/.env.local`:
 
-# Edit .env.local with:
-# - NEXT_PUBLIC_SUPABASE_URL
-# - NEXT_PUBLIC_SUPABASE_ANON_KEY
-# - NEXT_PUBLIC_MODAL_WEBHOOK_URL (from api_endpoints.py deployment)
+```env
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 
-# Start dev server
+# Optional overrides for local launcher
+# DASHBOARD_BACKEND_DIR=C:\path\to\machine-learn\modal-agent-swarm
+# PYTHON_BIN=C:\path\to\python.exe
+```
+
+Then run:
+
+```bash
 npm run dev
 ```
 
-### 3. Setup Database (Supabase)
+## Start a run from dashboard
 
-Run the SQL from `supabase/migrations/20260404_init.sql` in your Supabase SQL Editor.
+1. Open `http://localhost:3000/signup` (or `/login`).
+2. Go to `/dashboard`.
+3. In the sidebar "Start New Run" form, provide:
+   - task prompt
+   - dataset file
+   - labels file
+   - optional run name
+4. Click `Start Run`.
+5. Watch live phase/chat/flow updates as the Modal run executes.
 
-## Testing the Dashboard
-
-### Option A: Full End-to-End Test (Recommended)
-
-1. Deploy the Modal API: `modal deploy api_endpoints.py`
-2. Copy the Modal URL to `.env.local` as `NEXT_PUBLIC_MODAL_WEBHOOK_URL`
-3. Start the frontend: `npm run dev` (in dashboard-next)
-4. Go to http://localhost:3000/signup and create an account
-5. Type a task description like "Classify MNIST digits" and press Enter
-6. Watch the pipeline execute with live updates on the flowchart!
-
-### Option B: CLI Test Script (Without Modal)
-
-1. Start the frontend: `npm run dev`
-2. Create an account at http://localhost:3000/signup
-3. Get your user ID from **Supabase Dashboard → Authentication → Users**
-4. Run the test script:
+## Manual CLI run (still supported)
 
 ```bash
 cd modal-agent-swarm
-python test_dashboard.py YOUR_USER_ID
+modal run orchestrator.py --dataset-path /vol/datasets/sample.csv --task-description "Binary classification"
 ```
 
-5. Watch the dashboard update in realtime!
-
-## Running a Real Pipeline
+With dashboard tracking to an existing `swarm_runs.id`:
 
 ```bash
-modal run orchestrator.py \
-  --dataset-path /vol/datasets/mnist \
-  --task-description "Classify handwritten digits with >98% accuracy"
+modal run orchestrator.py --dataset-path /vol/datasets/sample.csv --labels-path /vol/datasets/sample.labels --task-description "Binary classification" --swarm-run-id "uuid"
 ```
 
-With dashboard tracking:
-```bash
-modal run orchestrator.py \
-  --dataset-path /vol/datasets/mnist \
-  --task-description "Classify handwritten digits" \
-  --swarm-run-id "uuid-from-supabase"
-```
+## Environment variables
 
-## Architecture
+### Frontend (`dashboard-next/.env.local`)
 
-```
-User Input (Dashboard)
-        ↓
-   Supabase DB  ←──────────────────┐
-        ↓                          │
-   Modal Backend                   │
-        ↓                          │
-┌──────────────────────────────────┤
-│  PlanAgent                       │
-│    ↓ (generates approaches)      │
-│  ImplementationAgent (A100 GPU)  │  ← Updates Supabase
-│    ↓ (trains models)             │     in realtime
-│  TuningAgent                     │
-│    ↓ (optimizes hyperparams)     │
-│  ReportAgent                     │
-│    ↓ (generates report)          │
-└──────────────────────────────────┘
-        ↓
-   Final Results in Dashboard
-```
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `DASHBOARD_BACKEND_DIR` (optional)
+- `PYTHON_BIN` (optional)
 
-## Environment Variables
+### Backend (`modal-agent-swarm/.env` + Modal secret)
 
-### Frontend (.env.local)
-```
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-```
+- Modal/runtime:
+  - `MODAL_APP_NAME` (default `ml-agent-swarm`)
+  - `MODAL_VOLUME_NAME` (default `ml-agent-swarm-data`)
+  - `MODAL_ENVIRONMENT` (default `main`)
+- LLM routing:
+  - `LLM_USE_DEPLOYED_SERVICE` (default `true`)
+  - `LLM_ALLOW_LOCAL_FALLBACK` (default `false`)
+  - `LLM_SERVICE_APP_NAME` (default `ml-agent-llm-service`)
+  - `LLM_SERVICE_CLASS_NAME` (default `LLMServer`)
+- Supabase (for backend writes):
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
 
-### Backend (Modal Secret: supabase-secrets)
-```
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-```
+## Validation commands
 
-## LLM Service Settings
-
-- `LLM_USE_DEPLOYED_SERVICE` (default `true`): Use deployed LLM service
-- `LLM_ALLOW_LOCAL_FALLBACK` (default `false`): Allow orchestrator to spin up local fallback LLM class if deployed service binding fails
-- `LLM_SERVICE_APP_NAME` (default `ml-agent-llm-service`): Deployed app name
-- `MODAL_ENVIRONMENT` (default `main`): Modal environment
-
-## Local Development
+### Dashboard
 
 ```bash
-# Run tests
+cd dashboard-next
+npx tsc --noEmit
+npm run build
+```
+
+### Backend
+
+```bash
+cd modal-agent-swarm
 pytest -q
-
-# Stream Modal logs
-modal app logs ml-agent-swarm
 ```
+
+## Troubleshooting
+
+- `spawn python ENOENT`:
+  - Set `PYTHON_BIN` in `dashboard-next/.env.local`, or use `uv` with launcher fallback.
+- Dashboard start API returns 500:
+  - Check response JSON `details`, `backendDir`, `launcherPath`, `triedPython`.
+- LLM service mismatch / unexpected local fallback:
+  - Ensure `llm_service.py` is deployed and `LLM_ALLOW_LOCAL_FALLBACK=false`.
+- No realtime updates:
+  - Confirm Supabase realtime publication is enabled for `swarm_runs` (migration includes this).

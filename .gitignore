@@ -8,4 +8,6 @@ dashboard-next/.env.local
 node_modules/
 __pycache__/
 
+.secrets.env
+
 runs_local/
