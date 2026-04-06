@@ -53,4 +53,5 @@ python -m vllm.entrypoints.openai.api_server \
     --tensor-parallel-size 1 \
     --max-model-len 8192 \
     --port 8123 \
-    --api-key "bananabobjoe"
+    --api-key "bananabobjoe" \
+    --enable-log-requests # Log incoming requests for debugging and monitoring

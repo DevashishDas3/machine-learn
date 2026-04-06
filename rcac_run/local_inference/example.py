@@ -14,3 +14,5 @@ response = client.chat.completions.create(
 )
 
 print(response.choices[0].message.content)
+
+

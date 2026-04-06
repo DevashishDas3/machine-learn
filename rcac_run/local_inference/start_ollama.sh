@@ -10,6 +10,9 @@
 #SBATCH --output=/scratch/gautschi/li5042/catapult2026/rcac_run/local_inference/start_ollama.out
 #SBATCH --error=/scratch/gautschi/li5042/catapult2026/rcac_run/local_inference/start_ollama.err
 
+# UNTESTED
+# USE vLLM INSTEAD-- simpler script. 
+
 # Load Apptainer
 # module load apptainer
 
